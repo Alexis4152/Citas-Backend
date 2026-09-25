@@ -1,0 +1,38 @@
+# Compilacion
+target/
+*.class
+*.jar
+*.war
+
+# Logs y volcados de la JVM
+*.log
+hs_err_pid*.log
+replay_pid*.log
+
+# Archivos subidos por los usuarios (fotos de doctores, logo). En produccion viven en un
+# volumen persistente (APP_UPLOADS_DIR), nunca en el repo.
+uploads/
+
+# Secretos y configuracion local
+.env
+.env.*
+!.env.example
+application-local.properties
+application-local.yml
+application-prod.properties
+application-prod.yml
+
+# IDEs y sistema
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+.factorypath
+.claude/
+.DS_Store
+Thumbs.db
+
+# Herramientas locales
+.github/modernize/
