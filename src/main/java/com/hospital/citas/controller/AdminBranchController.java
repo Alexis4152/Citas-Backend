@@ -41,3 +41,4 @@ public class AdminBranchController {
         return ApiResponse.ok(null, "Sede desactivada");
     }
 }
+
