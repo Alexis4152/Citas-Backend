@@ -15,6 +15,10 @@ public interface PatientService {
 
     PatientResponse getById(Long id);
 
+    /** Si quien actúa es DOCTOR, exige que el paciente sea suyo (tuvo cita con él o él lo dio
+     * de alta); si no, "no encontrado". Recepción/admin pasan sin revisar. */
+    void requireAccessible(Long patientId);
+
     PatientResponse create(PatientRequest request);
 
     /** Usada por recepción/agendado: crea el Patient (sin User) a partir de los datos capturados. */

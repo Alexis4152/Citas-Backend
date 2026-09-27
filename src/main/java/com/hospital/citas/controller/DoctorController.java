@@ -82,13 +82,13 @@ public class DoctorController {
             @Valid @RequestBody DoctorScheduleExceptionRequest request) {
         return ApiResponse.ok(
                 doctorScheduleService.createException(doctorService.getOwnDoctorEntity().getId(), request),
-                "Excepción de agenda creada");
+                "Ausencia registrada");
     }
 
     @DeleteMapping("/schedule-exceptions/{exceptionId}")
     public ApiResponse<Void> deleteScheduleException(@PathVariable Long exceptionId) {
         doctorScheduleService.deleteException(doctorService.getOwnDoctorEntity().getId(), exceptionId);
-        return ApiResponse.ok(null, "Excepción de agenda eliminada");
+        return ApiResponse.ok(null, "Ausencia eliminada");
     }
 
     @GetMapping("/appointments")

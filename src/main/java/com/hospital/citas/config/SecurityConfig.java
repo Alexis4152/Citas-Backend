@@ -75,6 +75,17 @@ public class SecurityConfig {
                         .requestMatchers("/api/webhooks/openpay").permitAll()
                         .requestMatchers("/api/appointments/by-token/**").permitAll()
                         .requestMatchers("/api/appointments/**").authenticated()
+                        // El doctor usa los módulos de Pacientes, Cobrar y Corte de caja; los servicios
+                        // lo acotan a lo suyo (ver DoctorScope). El resto de recepción no es para él.
+                        .requestMatchers(HttpMethod.GET, "/api/reception/appointments").hasAnyRole("RECEPTIONIST", "ADMIN", "DOCTOR")
+                        .requestMatchers(
+                                "/api/reception/patients", "/api/reception/patients/**",
+                                "/api/reception/prescriptions/*/pdf",
+                                "/api/reception/charge/**",
+                                "/api/reception/appointments/*/charge", "/api/reception/appointments/*/payments",
+                                "/api/reception/payments/**",
+                                "/api/reception/cash-cut", "/api/reception/cash-cut/**"
+                        ).hasAnyRole("RECEPTIONIST", "ADMIN", "DOCTOR")
                         .requestMatchers("/api/reception/**").hasAnyRole("RECEPTIONIST", "ADMIN")
                         .requestMatchers("/api/doctor/**").hasAnyRole("DOCTOR", "ADMIN")
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")

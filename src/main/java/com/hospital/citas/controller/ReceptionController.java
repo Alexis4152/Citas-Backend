@@ -158,6 +158,7 @@ public class ReceptionController {
      * solo pueden consultar el historial ya emitido de un paciente y descargar el PDF. */
     @GetMapping("/patients/{id}/prescriptions")
     public ApiResponse<List<PrescriptionResponse>> patientPrescriptions(@PathVariable Long id) {
+        patientService.requireAccessible(id);
         return ApiResponse.ok(prescriptionService.listForPatientAsStaff(id));
     }
 

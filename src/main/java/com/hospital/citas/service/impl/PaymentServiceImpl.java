@@ -18,6 +18,7 @@ import com.hospital.citas.repository.AppointmentRepository;
 import com.hospital.citas.repository.CashCutRepository;
 import com.hospital.citas.repository.DoctorRepository;
 import com.hospital.citas.repository.PaymentRepository;
+import com.hospital.citas.security.DoctorScope;
 import com.hospital.citas.security.SecurityUtils;
 import com.hospital.citas.service.PaymentService;
 import lombok.RequiredArgsConstructor;
@@ -60,6 +61,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final DoctorRepository doctorRepository;
     private final PaymentGateway gateway;
     private final PaymentMapper paymentMapper;
+    private final DoctorScope doctorScope;
 
     /** Minutos mínimos de anticipación para el reembolso automático al cancelar (1 hora). */
     @Value("${app.payments.auto-refund-min-minutes:60}")
@@ -146,6 +148,7 @@ public class PaymentServiceImpl implements PaymentService {
         Appointment appointment = appointmentRepository.findByIdWithDetails(appointmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cita no encontrada: " + appointmentId));
         checkReceptionistSpecialtyAllowed(actor, appointment.getDoctor());
+        doctorScope.requireOwnDoctor(actor, appointment.getDoctor(), "cobrar");
         // Se cobra una cita ya atendida, o una programada de HOY (el paciente paga en el mostrador
         // antes de pasar con el doctor: al cobrar se registra su llegada).
         boolean scheduledToday = appointment.getStatus() == AppointmentStatus.SCHEDULED
@@ -218,6 +221,7 @@ public class PaymentServiceImpl implements PaymentService {
         Appointment appointment = appointmentRepository.findByIdWithDetails(appointmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cita no encontrada: " + appointmentId));
         checkReceptionistSpecialtyAllowed(actor, appointment.getDoctor());
+        doctorScope.requireOwnDoctor(actor, appointment.getDoctor(), "ver los cobros de");
         return paymentRepository.findByAppointmentWithDetails(appointmentId).stream().map(paymentMapper::toResponse).toList();
     }
 
@@ -225,6 +229,7 @@ public class PaymentServiceImpl implements PaymentService {
     @Transactional
     public PaymentResponse refreshFromGateway(Long paymentId) {
         Payment payment = findPayment(paymentId);
+        doctorScope.requireOwnDoctor(SecurityUtils.getCurrentUserOrNull(), payment.getAppointment().getDoctor(), "consultar los cobros de");
         if (payment.getStatus() != PaymentStatus.PENDING || payment.getOpenpayTransactionId() == null) {
             return paymentMapper.toResponse(payment);
         }

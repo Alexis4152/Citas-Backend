@@ -10,6 +10,7 @@ import com.hospital.citas.exception.ResourceNotFoundException;
 import com.hospital.citas.exception.SlotUnavailableException;
 import com.hospital.citas.mapper.AppointmentMapper;
 import com.hospital.citas.repository.*;
+import com.hospital.citas.security.DoctorScope;
 import com.hospital.citas.security.SecurityUtils;
 import com.hospital.citas.service.AppointmentReceiptService;
 import com.hospital.citas.service.AppointmentService;
@@ -75,6 +76,7 @@ public class AppointmentServiceImpl implements AppointmentService {
     private final AppointmentReceiptService appointmentReceiptService;
     private final NotificationService notificationService;
     private final com.hospital.citas.service.PaymentService paymentService;
+    private final DoctorScope doctorScope;
 
     @Value("${app.appointments.no-show-grace-minutes:15}")
     private int noShowGraceMinutes;
@@ -549,6 +551,11 @@ public class AppointmentServiceImpl implements AppointmentService {
         if (!restriction.isEmpty()) {
             spec = spec.and(AppointmentSpecifications.doctorSpecialtyIn(restriction));
         }
+        // Un doctor (historial en la ficha de Pacientes) solo ve sus propias citas.
+        Long ownDoctorId = doctorScope.doctorIdOf(currentUser).orElse(null);
+        if (ownDoctorId != null) {
+            spec = spec.and(AppointmentSpecifications.search(ownDoctorId, null, null, null, null, null, null));
+        }
         return appointmentRepository.findAll(spec, pageable).map(appointmentMapper::toResponse);
     }
 
@@ -559,6 +566,8 @@ public class AppointmentServiceImpl implements AppointmentService {
     @Transactional(readOnly = true)
     public List<AppointmentResponse> lookupForCharge(String q) {
         User actor = requireCurrentUser();
+        // Un doctor solo cobra sus propias citas (recepción/admin: null = todas).
+        Long ownDoctorId = doctorScope.doctorIdOf(actor).orElse(null);
         String query = q == null ? "" : q.trim();
         List<Appointment> found;
         var uuid = UUID_IN_TEXT.matcher(query);
@@ -576,12 +585,17 @@ public class AppointmentServiceImpl implements AppointmentService {
                     ? AppointmentSpecifications.chargeQueue(today)
                     : AppointmentSpecifications.search(null, null, null, today.minusDays(30), today.plusDays(1), null, query)
                             .and(AppointmentSpecifications.statusIn(AppointmentStatus.SCHEDULED, AppointmentStatus.COMPLETED));
+            if (ownDoctorId != null) {
+                spec = spec.and(AppointmentSpecifications.search(ownDoctorId, null, null, null, null, null, null));
+            }
             found = appointmentRepository.findAll(spec, org.springframework.data.domain.PageRequest.of(0, 30,
                     org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "appointmentDate", "startTime"))).getContent();
         }
         List<Long> restriction = receptionistSpecialtyRestriction(actor);
         return found.stream()
                 .filter(a -> restriction.isEmpty() || restriction.contains(a.getDoctor().getSpecialty().getId()))
+                // QR/folio buscan una cita puntual: a un doctor solo se le muestra si es suya.
+                .filter(a -> ownDoctorId == null || ownDoctorId.equals(a.getDoctor().getId()))
                 .map(appointmentMapper::toResponse)
                 .toList();
     }

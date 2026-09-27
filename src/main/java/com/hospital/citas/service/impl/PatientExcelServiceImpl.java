@@ -4,9 +4,12 @@ import com.hospital.citas.dto.request.MedicalInfoRequest;
 import com.hospital.citas.dto.request.PatientRequest;
 import com.hospital.citas.dto.response.PatientImportSummary;
 import com.hospital.citas.entity.Patient;
+import com.hospital.citas.entity.User;
 import com.hospital.citas.enums.BloodType;
 import com.hospital.citas.exception.BusinessException;
 import com.hospital.citas.repository.PatientRepository;
+import com.hospital.citas.security.DoctorScope;
+import com.hospital.citas.security.SecurityUtils;
 import com.hospital.citas.service.PatientExcelService;
 import com.hospital.citas.service.PatientService;
 import jakarta.validation.ConstraintViolation;
@@ -62,6 +65,7 @@ public class PatientExcelServiceImpl implements PatientExcelService {
     private final PatientRepository patientRepository;
     private final PatientService patientService;
     private final Validator validator;
+    private final DoctorScope doctorScope;
 
     @Override
     public byte[] buildTemplate() {
@@ -79,7 +83,11 @@ public class PatientExcelServiceImpl implements PatientExcelService {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Pacientes");
             writeHeader(sheet);
-            List<Patient> patients = patientRepository.findByIsActiveTrue();
+            // Un doctor solo exporta a sus pacientes; recepción/admin, a todos.
+            User currentUser = SecurityUtils.getCurrentUserOrNull();
+            List<Patient> patients = doctorScope.doctorIdOf(currentUser)
+                    .map(doctorId -> patientRepository.findActiveOfDoctor(doctorId, currentUser.getId()))
+                    .orElseGet(patientRepository::findByIsActiveTrue);
             int rowIndex = 1;
             for (Patient patient : patients) {
                 Row row = sheet.createRow(rowIndex++);

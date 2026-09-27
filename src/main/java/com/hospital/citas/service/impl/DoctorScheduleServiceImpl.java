@@ -117,7 +117,7 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
         }
         if (!request.isAllDay()) {
             if (request.getStartTime() == null || request.getEndTime() == null) {
-                throw new BusinessException("Debe indicar hora de inicio y fin cuando la excepción no es de día completo");
+                throw new BusinessException("Indica la hora de inicio y de fin cuando la ausencia no es de todo el día");
             }
             if (!request.getStartTime().isBefore(request.getEndTime())) {
                 throw new BusinessException("La hora de inicio del bloqueo debe ser anterior a la hora de fin");
@@ -161,7 +161,7 @@ public class DoctorScheduleServiceImpl implements DoctorScheduleService {
     public void deleteException(Long doctorId, Long exceptionId) {
         DoctorScheduleException exception = doctorScheduleExceptionRepository.findById(exceptionId)
                 .filter(e -> e.getDoctor().getId().equals(doctorId))
-                .orElseThrow(() -> new ResourceNotFoundException("Excepción no encontrada: " + exceptionId));
+                .orElseThrow(() -> new ResourceNotFoundException("Ausencia no encontrada: " + exceptionId));
         exception.setIsActive(false);
         exception.setDeletedAt(LocalDateTime.now());
         exception.setDeletedBy(SecurityUtils.getCurrentUserOrNull());

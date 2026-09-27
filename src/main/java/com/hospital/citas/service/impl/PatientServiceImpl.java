@@ -16,6 +16,7 @@ import com.hospital.citas.repository.AppointmentRepository;
 import com.hospital.citas.repository.PatientRepository;
 import com.hospital.citas.repository.RoleRepository;
 import com.hospital.citas.repository.UserRepository;
+import com.hospital.citas.security.DoctorScope;
 import com.hospital.citas.security.SecurityUtils;
 import com.hospital.citas.service.EmailService;
 import com.hospital.citas.service.PatientService;
@@ -41,13 +42,29 @@ public class PatientServiceImpl implements PatientService {
     private final PasswordEncoder passwordEncoder;
     private final EmailService emailService;
     private final AppointmentRepository appointmentRepository;
+    private final DoctorScope doctorScope;
 
     @Override
     @Transactional(readOnly = true)
     public Page<PatientResponse> search(String query, Long doctorId, Long specialtyId, Pageable pageable) {
         String q = query == null ? "" : query;
-        return patientRepository.search(q, doctorId, specialtyId, pageable)
+        User currentUser = SecurityUtils.getCurrentUserOrNull();
+        Long ownerDoctorId = doctorScope.doctorIdOf(currentUser).orElse(null);
+        Long ownerUserId = ownerDoctorId == null ? null : currentUser.getId();
+        return patientRepository.search(q, doctorId, specialtyId, ownerDoctorId, ownerUserId, pageable)
                 .map(patientMapper::toResponse);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public void requireAccessible(Long patientId) {
+        User currentUser = SecurityUtils.getCurrentUserOrNull();
+        doctorScope.doctorIdOf(currentUser).ifPresent(doctorId -> {
+            if (!patientRepository.isPatientOfDoctor(patientId, doctorId, currentUser.getId())) {
+                // Mismo mensaje que un id inexistente: no se revela si el paciente existe.
+                throw new ResourceNotFoundException("Paciente no encontrado: " + patientId);
+            }
+        });
     }
 
     @Override
@@ -165,6 +182,7 @@ public class PatientServiceImpl implements PatientService {
     @Override
     @Transactional(readOnly = true)
     public PatientResponse getById(Long id) {
+        requireAccessible(id);
         return patientMapper.toResponse(getEntityById(id));
     }
 
@@ -178,6 +196,7 @@ public class PatientServiceImpl implements PatientService {
     @Override
     @Transactional
     public PatientResponse updateMedicalInfo(Long patientId, MedicalInfoRequest request) {
+        requireAccessible(patientId);
         Patient patient = getEntityById(patientId);
         applyMedicalInfo(patient, request, SecurityUtils.getCurrentUserOrNull());
         return patientMapper.toResponse(patient);
@@ -195,12 +214,18 @@ public class PatientServiceImpl implements PatientService {
     @Override
     @Transactional(readOnly = true)
     public List<PatientResponse> findDuplicates(Long patientId) {
+        requireAccessible(patientId);
         Patient patient = getEntityById(patientId);
+        User currentUser = SecurityUtils.getCurrentUserOrNull();
+        Long ownDoctorId = doctorScope.doctorIdOf(currentUser).orElse(null);
         return patientRepository.findPossibleDuplicates(
                         patient.getId(),
                         patient.getPhone() == null ? "" : patient.getPhone(),
                         patient.getEmail() == null ? "" : patient.getEmail())
-                .stream().map(patientMapper::toResponse).toList();
+                .stream()
+                // Un doctor solo ve (y puede fusionar) duplicados que también son pacientes suyos.
+                .filter(p -> ownDoctorId == null || patientRepository.isPatientOfDoctor(p.getId(), ownDoctorId, currentUser.getId()))
+                .map(patientMapper::toResponse).toList();
     }
 
     @Override
@@ -209,6 +234,8 @@ public class PatientServiceImpl implements PatientService {
         if (sourceId.equals(targetId)) {
             throw new BusinessException("Elige dos pacientes distintos para fusionar");
         }
+        requireAccessible(sourceId);
+        requireAccessible(targetId);
         Patient source = getEntityById(sourceId);
         Patient target = getEntityById(targetId);
         if (!Boolean.TRUE.equals(source.getIsActive()) || !Boolean.TRUE.equals(target.getIsActive())) {

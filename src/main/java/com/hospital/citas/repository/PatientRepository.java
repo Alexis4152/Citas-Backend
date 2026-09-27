@@ -15,7 +15,9 @@ public interface PatientRepository extends JpaRepository<Patient, Long> {
 
     /** Búsqueda de pacientes por texto libre (teléfono/nombre/apellido/correo) y, opcionalmente,
      * solo los que tienen (o tuvieron) al menos una cita con cierto doctor y/o de cierta
-     * especialidad -- el mismo criterio doctor/especialidad que los filtros de Citas. */
+     * especialidad -- el mismo criterio doctor/especialidad que los filtros de Citas.
+     * {@code ownerDoctorId}/{@code ownerUserId}: cuando busca un DOCTOR, solo sus pacientes
+     * (con cita con él o dados de alta por él); null para recepción/admin. */
     @Query("""
             SELECT p FROM Patient p
             WHERE p.isActive = true
@@ -27,11 +29,33 @@ public interface PatientRepository extends JpaRepository<Patient, Long> {
                     SELECT 1 FROM Appointment a WHERE a.patient = p AND a.doctor.id = :doctorId))
               AND (:specialtyId IS NULL OR EXISTS (
                     SELECT 1 FROM Appointment a WHERE a.patient = p AND a.doctor.specialty.id = :specialtyId))
+              AND (:ownerDoctorId IS NULL OR p.createdBy.id = :ownerUserId OR EXISTS (
+                    SELECT 1 FROM Appointment a WHERE a.patient = p AND a.doctor.id = :ownerDoctorId))
             """)
     Page<Patient> search(@Param("q") String q, @Param("doctorId") Long doctorId,
-                         @Param("specialtyId") Long specialtyId, Pageable pageable);
+                         @Param("specialtyId") Long specialtyId, @Param("ownerDoctorId") Long ownerDoctorId,
+                         @Param("ownerUserId") Long ownerUserId, Pageable pageable);
 
     List<Patient> findByIsActiveTrue();
+
+    /** Pacientes activos de un doctor: con al menos una cita con él o dados de alta por él. */
+    @Query("""
+            SELECT p FROM Patient p
+            WHERE p.isActive = true
+              AND (p.createdBy.id = :userId OR EXISTS (
+                    SELECT 1 FROM Appointment a WHERE a.patient = p AND a.doctor.id = :doctorId))
+            """)
+    List<Patient> findActiveOfDoctor(@Param("doctorId") Long doctorId, @Param("userId") Long userId);
+
+    /** ¿El paciente es de este doctor? (mismo criterio que {@link #findActiveOfDoctor}). */
+    @Query("""
+            SELECT COUNT(p) > 0 FROM Patient p
+            WHERE p.id = :patientId
+              AND (p.createdBy.id = :userId OR EXISTS (
+                    SELECT 1 FROM Appointment a WHERE a.patient = p AND a.doctor.id = :doctorId))
+            """)
+    boolean isPatientOfDoctor(@Param("patientId") Long patientId, @Param("doctorId") Long doctorId,
+                              @Param("userId") Long userId);
 
     /** Paciente de invitado (sin cuenta) ya registrado con el mismo teléfono + nombre +
      * apellido: se reutiliza en vez de crear un registro nuevo en cada cita. */

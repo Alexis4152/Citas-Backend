@@ -18,6 +18,7 @@ import com.hospital.citas.repository.AppointmentRepository;
 import com.hospital.citas.repository.AppointmentStatusHistoryRepository;
 import com.hospital.citas.repository.DoctorRepository;
 import com.hospital.citas.repository.PrescriptionRepository;
+import com.hospital.citas.security.DoctorScope;
 import com.hospital.citas.security.SecurityUtils;
 import com.hospital.citas.service.EmailService;
 import com.hospital.citas.service.PrescriptionReceiptService;
@@ -43,6 +44,7 @@ public class PrescriptionServiceImpl implements PrescriptionService {
     private final PrescriptionMapper prescriptionMapper;
     private final PrescriptionReceiptService prescriptionReceiptService;
     private final EmailService emailService;
+    private final DoctorScope doctorScope;
 
     @Override
     @Transactional
@@ -170,6 +172,7 @@ public class PrescriptionServiceImpl implements PrescriptionService {
         User currentUser = requireCurrentUser();
         Prescription prescription = findWithDetails(prescriptionId);
         checkReceptionistSpecialtyAllowed(currentUser, prescription.getAppointment().getDoctor(), "descargar recetas");
+        doctorScope.requireOwnDoctor(currentUser, prescription.getAppointment().getDoctor(), "descargar las recetas de");
         return prescriptionReceiptService.build(prescription);
     }
 
@@ -203,8 +206,11 @@ public class PrescriptionServiceImpl implements PrescriptionService {
     public List<PrescriptionResponse> listForPatientAsStaff(Long patientId) {
         User currentUser = requireCurrentUser();
         List<Long> restriction = receptionistSpecialtyRestriction(currentUser);
+        Long ownDoctorId = doctorScope.doctorIdOf(currentUser).orElse(null);
         return prescriptionRepository.findByAppointment_Patient_IdWithDetails(patientId).stream()
                 .filter(p -> restriction.isEmpty() || restriction.contains(p.getAppointment().getDoctor().getSpecialty().getId()))
+                // Un doctor solo ve las recetas que él emitió (en sus propias citas).
+                .filter(p -> ownDoctorId == null || ownDoctorId.equals(p.getAppointment().getDoctor().getId()))
                 .map(prescriptionMapper::toResponse)
                 .toList();
     }
