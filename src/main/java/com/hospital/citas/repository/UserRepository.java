@@ -13,7 +13,14 @@ import java.util.List;
 import java.util.Optional;
 
 public interface UserRepository extends JpaRepository<User, Long> {
+    /** Filtrada por el hospital actual ({@code @TenantId}): el correo es único por hospital. */
     Optional<User> findByEmail(String email);
+
+    /** Usuarios de plataforma (SUPER_ADMIN), que no pertenecen a ningún hospital. Usar en ROOT. */
+    Optional<User> findByEmailAndHospitalIdIsNull(String email);
+
+    /** Para el SUPER_ADMIN (en ROOT): ¿ese hospital ya tiene una cuenta con este correo? */
+    boolean existsByEmailAndHospitalId(String email, Long hospitalId);
     boolean existsByEmail(String email);
     List<User> findByRole_NameAndIsActiveTrue(RoleName roleName);
 

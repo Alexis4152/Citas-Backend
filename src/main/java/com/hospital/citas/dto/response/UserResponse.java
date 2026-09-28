@@ -16,6 +16,10 @@ public class UserResponse {
     private String lastName;
     private String phone;
     private String role;
+    /** Hospital de la cuenta (null solo en el SUPER_ADMIN) y su slug: el frontend lo compara
+     * con el link /c/<slug> abierto para no mezclar la sesión de un hospital con otro. */
+    private Long hospitalId;
+    private String hospitalSlug;
     private Boolean isActive;
     private Boolean mustChangePassword;
     private LocalDateTime createdAt;

@@ -1,5 +1,7 @@
 package com.hospital.citas.service.impl;
 
+import com.hospital.citas.tenant.TenantLinks;
+
 import com.hospital.citas.dto.request.*;
 import com.hospital.citas.dto.response.AppointmentResponse;
 import com.hospital.citas.entity.*;
@@ -27,7 +29,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -86,8 +87,7 @@ public class AppointmentServiceImpl implements AppointmentService {
     private int maxActivePerPhone;
     @Value("${app.appointments.self-reschedule-min-hours:24}")
     private int selfRescheduleMinHours;
-    @Value("${app.frontend-url:http://localhost:5175}")
-    private String frontendUrl;
+    private final TenantLinks tenantLinks;
 
     @Override
     @Transactional
@@ -410,7 +410,7 @@ public class AppointmentServiceImpl implements AppointmentService {
      * alargarse un poco, o el paciente llegar justo al final), se asume que no se presentó.
      * Nunca toca citas con la llegada del paciente registrada. {@code changedBy} queda nulo en
      * el historial -- aquí no hay un usuario autenticado detrás, es el sistema el que actúa. */
-    @Scheduled(fixedRate = 60_000)
+    // Lo dispara TenantJobs una vez por hospital (cada llamada ya corre con su hospital).
     @Transactional
     public void autoMarkPastDueAsNoShow() {
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(noShowGraceMinutes);
@@ -434,7 +434,7 @@ public class AppointmentServiceImpl implements AppointmentService {
      * empieza dentro de las próximas 2 horas y todavía no lo tiene. {@code reminder2hSentAt}
      * se marca en la misma transacción y los correos salen hasta el commit: si dos instancias
      * corren el job a la vez, gracias a {@code @Version} solo una confirma y solo esa manda. */
-    @Scheduled(fixedRate = 300_000)
+    // Lo dispara TenantJobs una vez por hospital (cada llamada ya corre con su hospital).
     @Transactional
     public void sendTwoHourReminders() {
         LocalDateTime now = LocalDateTime.now();
@@ -525,7 +525,7 @@ public class AppointmentServiceImpl implements AppointmentService {
             }
         }
         byEmail.forEach((email, appointments) -> emailService.sendGuestAppointmentLinks(
-                email, appointments.get(0).getPatient().getFirstName(), appointments, frontendUrl));
+                email, appointments.get(0).getPatient().getFirstName(), appointments, tenantLinks.frontendBase()));
         return null;
     }
 

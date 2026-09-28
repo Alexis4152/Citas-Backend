@@ -6,7 +6,8 @@ import com.hospital.citas.dto.request.ChargeRequest;
 import com.hospital.citas.dto.request.OnlinePaymentRequest;
 import com.hospital.citas.dto.response.PaymentReportResponse;
 import com.hospital.citas.dto.response.PaymentResponse;
-import com.hospital.citas.payment.OpenpayProperties;
+import com.hospital.citas.entity.Hospital;
+import com.hospital.citas.tenant.HospitalDirectory;
 import com.hospital.citas.service.PaymentService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -26,16 +27,20 @@ import java.util.UUID;
 public class PaymentController {
 
     private final PaymentService paymentService;
-    private final OpenpayProperties openpayProperties;
+    private final HospitalDirectory hospitalDirectory;
 
-    /** Llaves PÚBLICAS de OpenPay para que el navegador tokenice la tarjeta (la llave privada
-     * nunca sale del backend). */
+    /** Llaves PÚBLICAS de OpenPay del hospital del link, para que el navegador tokenice la
+     * tarjeta (la llave privada nunca sale del backend). {@code enabled=false}: ese hospital no
+     * tiene pagos en línea y sus pacientes pagan en recepción. */
     @GetMapping("/public/payments/config")
     public ApiResponse<Map<String, Object>> config() {
+        Hospital hospital = hospitalDirectory.current();
+        boolean enabled = hospital.hasOpenpay();
         return ApiResponse.ok(Map.of(
-                "merchantId", String.valueOf(openpayProperties.getMerchantId()),
-                "publicKey", String.valueOf(openpayProperties.getPublicKey()),
-                "sandbox", !openpayProperties.isProduction()));
+                "enabled", enabled,
+                "merchantId", enabled ? hospital.getOpenpayMerchantId().trim() : "",
+                "publicKey", enabled ? hospital.getOpenpayPublicKey().trim() : "",
+                "sandbox", !Boolean.TRUE.equals(hospital.getOpenpayProduction())));
     }
 
     /** Invitado: paga por anticipado con el token de su cita. */

@@ -1,5 +1,7 @@
 package com.hospital.citas.controller;
 
+import com.hospital.citas.tenant.TenantContext;
+
 import com.hospital.citas.dto.ApiResponse;
 import com.hospital.citas.dto.request.ChangePasswordRequest;
 import com.hospital.citas.dto.request.ForgotPasswordRequest;
@@ -48,7 +50,7 @@ public class AuthController {
     public ResponseEntity<ApiResponse<LoginResponse>> register(@Valid @RequestBody RegisterRequest request,
                                                                  HttpServletResponse response) {
         LoginResponse loginResponse = authService.register(request);
-        issueRefreshCookie(loginResponse.getUser().getEmail(), response);
+        issueRefreshCookie(loginResponse.getUser().getId(), response);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.ok(loginResponse, "Cuenta creada correctamente"));
     }
@@ -56,8 +58,10 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<ApiResponse<LoginResponse>> login(@Valid @RequestBody LoginRequest request,
                                                               HttpServletResponse response) {
-        LoginResponse loginResponse = authService.login(request);
-        issueRefreshCookie(loginResponse.getUser().getEmail(), response);
+        // Desde el link de un hospital se busca la cuenta en ese hospital; en la raíz del
+        // sitio (sin hospital) solo entra el SUPER_ADMIN, que se busca en ROOT.
+        LoginResponse loginResponse = TenantContext.callAs(loginTenant(), () -> authService.login(request));
+        issueRefreshCookie(loginResponse.getUser().getId(), response);
         return ResponseEntity.ok(ApiResponse.ok(loginResponse));
     }
 
@@ -71,7 +75,8 @@ public class AuthController {
     @PostMapping("/refresh")
     public ResponseEntity<ApiResponse<LoginResponse>> refresh(HttpServletRequest request, HttpServletResponse response) {
         String rawToken = readCookie(request);
-        RefreshTokenService.RotatedToken rotated = refreshTokenService.rotate(rawToken);
+        // El refresh token es secreto y único: identifica la cuenta sin importar el hospital del link.
+        RefreshTokenService.RotatedToken rotated = TenantContext.callAs(TenantContext.ROOT, () -> refreshTokenService.rotate(rawToken));
         setRefreshCookie(response, rotated.newRawToken());
 
         String accessToken = jwtTokenProvider.generateToken(rotated.user());
@@ -85,21 +90,23 @@ public class AuthController {
 
     @PostMapping("/logout")
     public ResponseEntity<ApiResponse<Void>> logout(HttpServletRequest request, HttpServletResponse response) {
-        refreshTokenService.revoke(readCookie(request));
+        String rawToken = readCookie(request);
+        TenantContext.runAs(TenantContext.ROOT, () -> refreshTokenService.revoke(rawToken));
         clearRefreshCookie(response);
         return ResponseEntity.ok(ApiResponse.ok(null, "Sesión cerrada"));
     }
 
     @PostMapping("/forgot-password")
     public ResponseEntity<ApiResponse<Void>> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
-        authService.forgotPassword(request);
+        TenantContext.runAs(loginTenant(), () -> authService.forgotPassword(request));
         return ResponseEntity.ok(ApiResponse.ok(null,
                 "Si el correo existe, te enviamos instrucciones para recuperar tu contraseña"));
     }
 
     @PostMapping("/reset-password")
     public ResponseEntity<ApiResponse<Void>> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
-        authService.resetPassword(request);
+        // El token del enlace es secreto y único: se busca en ROOT.
+        TenantContext.runAs(TenantContext.ROOT, () -> authService.resetPassword(request));
         return ResponseEntity.ok(ApiResponse.ok(null, "Contraseña actualizada correctamente"));
     }
 
@@ -122,10 +129,17 @@ public class AuthController {
 
     // ── Cookie helpers ───────────────────────────────────────────
 
-    private void issueRefreshCookie(String userEmail, HttpServletResponse response) {
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new IllegalStateException("Usuario recién autenticado no encontrado: " + userEmail));
-        setRefreshCookie(response, refreshTokenService.issue(user));
+    private void issueRefreshCookie(Long userId, HttpServletResponse response) {
+        TenantContext.runAs(TenantContext.ROOT, () -> {
+            User user = userRepository.findById(userId)
+                    .orElseThrow(() -> new IllegalStateException("Usuario recién autenticado no encontrado: " + userId));
+            setRefreshCookie(response, refreshTokenService.issue(user));
+        });
+    }
+
+    /** Hospital del link, o ROOT si se entra desde la raíz del sitio (solo SUPER_ADMIN). */
+    private static long loginTenant() {
+        return TenantContext.hospitalIdOrNull() != null ? TenantContext.get() : TenantContext.ROOT;
     }
 
     private void setRefreshCookie(HttpServletResponse response, String rawToken) {

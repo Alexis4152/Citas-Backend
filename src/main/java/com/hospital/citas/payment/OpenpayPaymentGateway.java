@@ -4,8 +4,10 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hospital.citas.entity.Hospital;
 import com.hospital.citas.exception.BusinessException;
 import com.hospital.citas.exception.PaymentGatewayException;
+import com.hospital.citas.tenant.HospitalDirectory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatusCode;
@@ -23,28 +25,44 @@ import java.time.Duration;
  * privada, cargos con tarjeta tokenizada en el navegador (los datos de la tarjeta nunca llegan
  * a este backend), cargos SPEI y reembolsos. Los errores de tarjeta (códigos 3xxx) se traducen
  * a un mensaje claro para el cliente; el resto, a {@link PaymentGatewayException}.
+ * <p>
+ * Cada hospital cobra con SU cuenta de OpenPay (llaves en {@link Hospital}, capturadas por el
+ * SUPER_ADMIN): el cliente REST se arma con las llaves del hospital de la operación en curso.
  */
 @Component
 public class OpenpayPaymentGateway implements PaymentGateway {
 
     private static final Logger log = LoggerFactory.getLogger(OpenpayPaymentGateway.class);
 
-    private final RestClient restClient;
-    private final ObjectMapper objectMapper;
+    private static final String SANDBOX_URL = "https://sandbox-api.openpay.mx/v1";
+    private static final String PRODUCTION_URL = "https://api.openpay.mx/v1";
 
-    public OpenpayPaymentGateway(OpenpayProperties properties, ObjectMapper objectMapper) {
+    private final ObjectMapper objectMapper;
+    private final HospitalDirectory hospitalDirectory;
+    private final SimpleClientHttpRequestFactory requestFactory;
+
+    public OpenpayPaymentGateway(OpenpayProperties properties, ObjectMapper objectMapper, HospitalDirectory hospitalDirectory) {
         this.objectMapper = objectMapper;
-        var factory = new SimpleClientHttpRequestFactory();
+        this.hospitalDirectory = hospitalDirectory;
+        this.requestFactory = new SimpleClientHttpRequestFactory();
         int timeout = properties.getTimeoutSeconds() > 0 ? properties.getTimeoutSeconds() : 15;
-        factory.setConnectTimeout(Duration.ofSeconds(timeout));
-        factory.setReadTimeout(Duration.ofSeconds(timeout));
-        String root = (properties.getBaseUrl() != null ? properties.getBaseUrl().replaceAll("/+$", "") : "https://sandbox-api.openpay.mx/v1")
-                + "/" + (properties.getMerchantId() != null ? properties.getMerchantId() : "");
-        this.restClient = RestClient.builder()
+        requestFactory.setConnectTimeout(Duration.ofSeconds(timeout));
+        requestFactory.setReadTimeout(Duration.ofSeconds(timeout));
+    }
+
+    /** Cliente con las llaves del hospital de la operación en curso. */
+    private RestClient client() {
+        Hospital hospital = hospitalDirectory.current();
+        if (!hospital.hasOpenpay()) {
+            throw new BusinessException("Este hospital todavía no tiene pagos en línea configurados: el pago se hace en recepción.");
+        }
+        String root = (Boolean.TRUE.equals(hospital.getOpenpayProduction()) ? PRODUCTION_URL : SANDBOX_URL)
+                + "/" + hospital.getOpenpayMerchantId().trim();
+        return RestClient.builder()
                 .baseUrl(root)
-                .requestFactory(factory)
+                .requestFactory(requestFactory)
                 .defaultHeaders(h -> {
-                    h.setBasicAuth(properties.getPrivateKey() != null ? properties.getPrivateKey() : "", "", StandardCharsets.UTF_8);
+                    h.setBasicAuth(hospital.getOpenpayPrivateKey().trim(), "", StandardCharsets.UTF_8);
                     h.setContentType(MediaType.APPLICATION_JSON);
                     h.set("Accept", MediaType.APPLICATION_JSON_VALUE);
                 })
@@ -61,17 +79,17 @@ public class OpenpayPaymentGateway implements PaymentGateway {
                 charge.deviceSessionId(), customer,
                 // Tarjeta: cobro directo. SPEI: se confirma después, cuando el cliente transfiere.
                 charge.kind() == Kind.CARD);
-        return call(() -> restClient.post().uri("/charges").body(body), "crear el cargo");
+        return call(() -> client().post().uri("/charges").body(body), "crear el cargo");
     }
 
     @Override
     public GatewayResult getCharge(String id) {
-        return call(() -> restClient.get().uri("/charges/{id}", id), "consultar el cargo");
+        return call(() -> client().get().uri("/charges/{id}", id), "consultar el cargo");
     }
 
     @Override
     public GatewayResult refund(String id, BigDecimal amount, String reason) {
-        return call(() -> restClient.post().uri("/charges/{id}/refund", id).body(new RefundRequest(reason, amount)),
+        return call(() -> client().post().uri("/charges/{id}/refund", id).body(new RefundRequest(reason, amount)),
                 "reembolsar el cargo");
     }
 

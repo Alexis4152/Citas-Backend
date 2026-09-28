@@ -1,7 +1,7 @@
 -- ============================================================
 -- Hospital Citas - init.sql
 -- Base de datos NUEVA y lista para usar: esquema completo (equivale a 01_schema.sql + las
--- migraciones 03 a 19 ya aplicadas) + datos minimos para poder entrar al sistema:
+-- migraciones 03 a 20 ya aplicadas; la 20 -- multi-hospital -- va al final de este archivo) + datos minimos para poder entrar al sistema:
 --   * los 4 roles,
 --   * la configuracion del hospital (editable desde el panel de admin),
 --   * la configuracion de correo (deshabilitada; se captura en el panel),
@@ -13,7 +13,7 @@
 -- Es idempotente: correrlo de nuevo no duplica nada ni pisa el usuario admin existente.
 --
 -- Para una BD que ya venia de 01_schema.sql/02_seed.sql, NO uses este script: aplica las
--- migraciones incrementales que le falten (db/03_*.sql ... db/19_*.sql).
+-- migraciones incrementales que le falten (db/03_*.sql ... db/20_*.sql).
 -- ============================================================
 
 -- btree_gist: necesaria para la restriccion que impide citas traslapadas del mismo doctor.
@@ -430,3 +430,94 @@ SELECT 'ing.arturopineda.94@gmail.com',
        'Arturo', 'Pineda', r.id, TRUE
 FROM roles r WHERE r.name = 'ADMIN'
 AND NOT EXISTS (SELECT 1 FROM users WHERE email = 'ing.arturopineda.94@gmail.com');
+
+-- ============================================================
+-- MULTI-HOSPITAL (idéntico a db/20_multi_hospital.sql): lo de arriba queda como el hospital 1
+-- (/c/consultorio-1) y se crea el usuario SUPER_ADMIN.
+-- ============================================================
+
+BEGIN;
+
+-- ============ HOSPITALES ============
+
+CREATE TABLE IF NOT EXISTS hospitals (
+    id                   BIGSERIAL PRIMARY KEY,
+    name                 VARCHAR(150) NOT NULL,
+    slug                 VARCHAR(60)  NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
+    is_active            BOOLEAN      NOT NULL DEFAULT TRUE,
+    -- Cuenta de OpenPay del hospital (el dinero le llega directo). Sin llaves: solo cobra en recepción.
+    openpay_merchant_id  VARCHAR(100),
+    openpay_private_key  VARCHAR(100),
+    openpay_public_key   VARCHAR(100),
+    openpay_production   BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_at           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMP
+);
+
+-- Hospital 1: todo lo que ya existía. Toma el nombre que el admin tenía configurado.
+INSERT INTO hospitals (id, name, slug)
+SELECT 1, COALESCE((SELECT name FROM hospital_config ORDER BY id LIMIT 1), 'Consultorio 1'), 'consultorio-1'
+WHERE NOT EXISTS (SELECT 1 FROM hospitals WHERE id = 1);
+SELECT setval('hospitals_id_seq', GREATEST((SELECT MAX(id) FROM hospitals), 1));
+
+-- ============ hospital_id EN CADA TABLA DE NEGOCIO ============
+
+DO $$
+DECLARE
+    t TEXT;
+BEGIN
+    FOREACH t IN ARRAY ARRAY[
+        'users', 'branches', 'specialties', 'doctors', 'doctor_schedules', 'doctor_schedule_exceptions',
+        'patients', 'appointments', 'appointment_status_history', 'notifications', 'prescriptions',
+        'cash_cuts', 'payments', 'hospital_config', 'email_config'
+    ] LOOP
+        EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS hospital_id BIGINT REFERENCES hospitals(id)', t);
+        IF t = 'users' THEN
+            -- El SUPER_ADMIN se queda sin hospital (también en una segunda corrida).
+            UPDATE users u SET hospital_id = 1
+            WHERE u.hospital_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM roles r WHERE r.id = u.role_id AND r.name = 'SUPER_ADMIN');
+        ELSE
+            EXECUTE format('UPDATE %I SET hospital_id = 1 WHERE hospital_id IS NULL', t);
+        END IF;
+        -- users queda NULLABLE: el SUPER_ADMIN no pertenece a ningún hospital.
+        IF t <> 'users' THEN
+            EXECUTE format('ALTER TABLE %I ALTER COLUMN hospital_id SET NOT NULL', t);
+        END IF;
+        EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I(hospital_id)', 'idx_' || t || '_hospital_id', t);
+    END LOOP;
+END $$;
+
+-- Un solo renglón de configuración (marca, SMTP) por hospital.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_hospital_config_hospital ON hospital_config(hospital_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_email_config_hospital ON email_config(hospital_id);
+
+-- ============ UNICIDAD POR HOSPITAL ============
+
+-- Correo: único dentro de cada hospital; entre usuarios de plataforma (sin hospital), único global.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_hospital_email ON users(hospital_id, email) WHERE hospital_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_platform_email ON users(email) WHERE hospital_id IS NULL;
+
+-- Especialidades: el nombre se repite entre hospitales (cada uno tiene su "Pediatría").
+ALTER TABLE specialties DROP CONSTRAINT IF EXISTS specialties_name_key;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_specialties_hospital_name ON specialties(hospital_id, name);
+
+-- ============ SUPER ADMIN ============
+
+ALTER TABLE roles DROP CONSTRAINT IF EXISTS roles_name_check;
+ALTER TABLE roles ADD CONSTRAINT roles_name_check
+    CHECK (name IN ('SUPER_ADMIN', 'ADMIN', 'RECEPTIONIST', 'DOCTOR', 'PATIENT'));
+INSERT INTO roles (name) VALUES ('SUPER_ADMIN') ON CONFLICT (name) DO NOTHING;
+
+-- Usuario de plataforma (Nexora). password_hash es un BCrypt de una contraseña temporal
+-- (no queda en texto plano aquí); se pide cambiarla en el primer ingreso. Entra en la raíz del
+-- sitio (/login), no en el link de un hospital.
+INSERT INTO users (email, password_hash, first_name, last_name, role_id, is_active, must_change_password, hospital_id)
+SELECT 'ing.arturopineda.94@gmail.com',
+       '$2a$10$UKPROg2pWzf2VPm24Blq2OAZD3CqFMANRddSWWkInsRNMtt/KBHMm',
+       'Super', 'Admin', r.id, TRUE, TRUE, NULL
+FROM roles r WHERE r.name = 'SUPER_ADMIN'
+AND NOT EXISTS (SELECT 1 FROM users WHERE hospital_id IS NULL AND email = 'ing.arturopineda.94@gmail.com');
+
+COMMIT;

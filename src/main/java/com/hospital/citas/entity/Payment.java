@@ -1,5 +1,6 @@
 package com.hospital.citas.entity;
 
+import com.hospital.citas.tenant.TenantEntity;
 import com.hospital.citas.enums.PaymentChannel;
 import com.hospital.citas.enums.PaymentMethod;
 import com.hospital.citas.enums.PaymentStatus;
@@ -21,7 +22,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "payments")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class Payment {
+public class Payment extends TenantEntity {
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

@@ -1,5 +1,9 @@
 package com.hospital.citas.service.impl;
 
+import com.hospital.citas.tenant.TenantContext;
+import com.hospital.citas.tenant.TenantLinks;
+import java.util.Optional;
+
 import com.hospital.citas.dto.request.ChangePasswordRequest;
 import com.hospital.citas.dto.request.ForgotPasswordRequest;
 import com.hospital.citas.dto.request.LoginRequest;
@@ -24,7 +28,6 @@ import com.hospital.citas.service.EmailService;
 import com.hospital.citas.service.PatientService;
 import com.hospital.citas.service.RefreshTokenService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.LockedException;
@@ -53,12 +56,13 @@ public class AuthServiceImpl implements AuthService {
     private final RefreshTokenService refreshTokenService;
     private final EmailService emailService;
 
-    @Value("${app.frontend-url}")
-    private String frontendUrl;
+    private final TenantLinks tenantLinks;
 
     @Override
     @Transactional
     public LoginResponse register(RegisterRequest request) {
+        // Las cuentas de paciente son por hospital: solo se registra desde el link de uno.
+        TenantContext.requireHospitalId();
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new DuplicateResourceException("Ya existe una cuenta con ese correo");
         }
@@ -105,7 +109,7 @@ public class AuthServiceImpl implements AuthService {
             authentication = authenticationManager.authenticate(
                     new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword()));
         } catch (LockedException e) {
-            String detail = userRepository.findByEmail(request.getEmail())
+            String detail = findLoginUser(request.getEmail())
                     .map(User::getLockedUntil)
                     .map(until -> "Intenta de nuevo en " + Math.max(1, Duration.between(LocalDateTime.now(), until).toMinutes()) + " minuto(s).")
                     .orElse("Intenta de nuevo más tarde.");
@@ -128,7 +132,7 @@ public class AuthServiceImpl implements AuthService {
     }
 
     private void registerFailedLoginAttempt(String email) {
-        userRepository.findByEmail(email).ifPresent(user -> {
+        findLoginUser(email).ifPresent(user -> {
             int attempts = user.getFailedLoginAttempts() + 1;
             user.setFailedLoginAttempts(attempts);
             if (attempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
@@ -136,6 +140,14 @@ public class AuthServiceImpl implements AuthService {
             }
             userRepository.save(user);
         });
+    }
+
+    /** Cuenta con ese correo en el hospital del link (filtrado por @TenantId) o, sin hospital
+     * (login en la raíz del sitio, que el controller corre en ROOT), la del SUPER_ADMIN. */
+    private Optional<User> findLoginUser(String email) {
+        return TenantContext.hospitalIdOrNull() != null
+                ? userRepository.findByEmail(email)
+                : userRepository.findByEmailAndHospitalIdIsNull(email);
     }
 
     @Override
@@ -152,7 +164,7 @@ public class AuthServiceImpl implements AuthService {
     public void forgotPassword(ForgotPasswordRequest request) {
         // Misma respuesta exista o no la cuenta (anti-enumeración): el controller siempre
         // regresa 200 sin importar lo que pase aquí adentro.
-        userRepository.findByEmail(request.getEmail())
+        findLoginUser(request.getEmail())
                 .filter(u -> Boolean.TRUE.equals(u.getIsActive()))
                 .ifPresent(user -> {
                     PasswordResetToken resetToken = PasswordResetToken.builder()
@@ -161,7 +173,7 @@ public class AuthServiceImpl implements AuthService {
                             .expiresAt(LocalDateTime.now().plusMinutes(30))
                             .build();
                     passwordResetTokenRepository.save(resetToken);
-                    String resetUrl = frontendUrl + "/restablecer-password/" + resetToken.getToken();
+                    String resetUrl = tenantLinks.frontendBase() + "/restablecer-password/" + resetToken.getToken();
                     emailService.sendPasswordResetEmail(user, resetUrl);
                 });
     }

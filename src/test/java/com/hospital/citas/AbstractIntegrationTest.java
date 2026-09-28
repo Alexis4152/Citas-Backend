@@ -6,7 +6,13 @@ import com.hospital.citas.dto.response.LoginResponse;
 import com.hospital.citas.entity.*;
 import com.hospital.citas.enums.RoleName;
 import com.hospital.citas.repository.*;
+import com.hospital.citas.tenant.TenantContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.http.HttpRequest;
+import org.springframework.http.client.ClientHttpRequestExecution;
+import org.springframework.http.client.ClientHttpRequestInterceptor;
+import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
@@ -25,7 +31,11 @@ import java.util.List;
 import java.util.UUID;
 
 /** Base de las pruebas de integración: app real (puerto aleatorio) + H2, con helpers para
- * crear usuarios/sedes/especialidades/doctores/pacientes de prueba y autenticarse. */
+ * crear usuarios/sedes/especialidades/doctores/pacientes de prueba y autenticarse.
+ * <p>
+ * Multi-hospital: todo corre en el hospital "test" (data.sql). Los repositorios que usan los
+ * tests trabajan con ese hospital en {@link TenantContext}, y cada request HTTP manda el
+ * header {@code X-Hospital: test}, igual que el frontend desde el link /c/test. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @org.springframework.context.annotation.Import(FakePaymentGatewayConfig.class)
@@ -60,6 +70,38 @@ public abstract class AbstractIntegrationTest {
 
     @Autowired
     protected PasswordEncoder passwordEncoder;
+
+    protected static final String TEST_HOSPITAL_SLUG = "test";
+
+    @Autowired
+    protected HospitalRepository hospitalRepository;
+
+    @BeforeEach
+    void useTestHospital() {
+        Long hospitalId = hospitalRepository.findBySlug(TEST_HOSPITAL_SLUG).orElseThrow().getId();
+        TenantContext.set(hospitalId);
+        var interceptors = restTemplate.getRestTemplate().getInterceptors();
+        if (interceptors.stream().noneMatch(HospitalHeaderInterceptor.class::isInstance)) {
+            interceptors.add(new HospitalHeaderInterceptor());
+        }
+    }
+
+    @AfterEach
+    void clearHospital() {
+        TenantContext.clear();
+    }
+
+    /** Manda el hospital de pruebas en cada request, salvo que el test ponga otro. */
+    static class HospitalHeaderInterceptor implements ClientHttpRequestInterceptor {
+        @Override
+        public ClientHttpResponse intercept(HttpRequest request, byte[] body, ClientHttpRequestExecution execution)
+                throws java.io.IOException {
+            if (!request.getHeaders().containsKey("X-Hospital")) {
+                request.getHeaders().add("X-Hospital", TEST_HOSPITAL_SLUG);
+            }
+            return execution.execute(request, body);
+        }
+    }
 
     @BeforeEach
     void ensureRoles() {

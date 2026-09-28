@@ -21,6 +21,10 @@ public interface AppointmentRepository extends JpaRepository<Appointment, Long>,
 
     Optional<Appointment> findByCancelToken(UUID cancelToken);
 
+    /** Hospital de una cita por su token (enlaces de correo sin /c/<slug>). Usar en ROOT. */
+    @Query("select a.hospitalId from Appointment a where a.cancelToken = :cancelToken")
+    List<Long> findHospitalIdsByCancelToken(@Param("cancelToken") UUID cancelToken);
+
     /** Igual que {@link #findByCancelToken}, pero con doctor/sede/paciente ya cargados -- usada
      * por el comprobante público en PDF ({@code generateReceiptPdfByToken}), que no pasa por
      * {@code findAppointment}/{@link #findByIdWithDetails} porque busca por token, no por id. */

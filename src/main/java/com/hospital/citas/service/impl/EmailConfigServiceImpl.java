@@ -1,5 +1,11 @@
 package com.hospital.citas.service.impl;
 
+import java.util.concurrent.ConcurrentHashMap;
+
+import java.util.Map;
+
+import com.hospital.citas.tenant.TenantContext;
+
 import com.hospital.citas.dto.request.EmailConfigRequest;
 import com.hospital.citas.dto.response.EmailConfigResponse;
 import com.hospital.citas.entity.EmailConfig;
@@ -18,10 +24,9 @@ public class EmailConfigServiceImpl implements EmailConfigService {
 
     private final EmailConfigRepository emailConfigRepository;
 
-    // Igual que HospitalConfigServiceImpl.cachedConfig: esta config se lee una vez por CADA
-    // correo enviado (EmailServiceImpl consulta enabled/host/usuario/password en cada envío)
-    // pero casi nunca se escribe -- cachear evita un SELECT completo por correo.
-    private volatile EmailConfig cachedConfig;
+    // Un renglón por hospital, en caché por hospital (igual que HospitalConfigServiceImpl):
+    // se lee una vez por CADA correo que sale y cada hospital manda con SU propio SMTP.
+    private final Map<Long, EmailConfig> cache = new ConcurrentHashMap<>();
 
     @Override
     public EmailConfigResponse get() {
@@ -44,13 +49,14 @@ public class EmailConfigServiceImpl implements EmailConfigService {
         config.setUpdatedAt(LocalDateTime.now());
         config.setUpdatedBy(SecurityUtils.getCurrentUserOrNull());
         EmailConfig saved = emailConfigRepository.save(config);
-        cachedConfig = saved;
+        cache.put(saved.getHospitalId(), saved);
         return toResponse(saved);
     }
 
     @Override
     public EmailConfig getEntity() {
-        EmailConfig cached = cachedConfig;
+        long hospitalId = TenantContext.requireHospitalId();
+        EmailConfig cached = cache.get(hospitalId);
         if (cached != null) {
             return cached;
         }
@@ -61,7 +67,7 @@ public class EmailConfigServiceImpl implements EmailConfigService {
                         .smtpPort(587)
                         .updatedAt(LocalDateTime.now())
                         .build()));
-        cachedConfig = loaded;
+        cache.put(hospitalId, loaded);
         return loaded;
     }
 

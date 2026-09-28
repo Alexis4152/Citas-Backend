@@ -1,5 +1,6 @@
 package com.hospital.citas.entity;
 
+import com.hospital.citas.tenant.TenantEntity;
 import jakarta.persistence.*;
 import lombok.Builder;
 import lombok.Getter;
@@ -25,7 +26,7 @@ import java.time.LocalDateTime;
 @SuperBuilder
 @NoArgsConstructor
 @MappedSuperclass
-public abstract class AuditableEntity {
+public abstract class AuditableEntity extends TenantEntity {
 
     @Column(nullable = false)
     @Builder.Default
