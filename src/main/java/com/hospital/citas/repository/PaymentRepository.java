@@ -16,6 +16,10 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
 
     Optional<Payment> findByOpenpayTransactionId(String openpayTransactionId);
 
+    /** Hospital dueño de una transacción de OpenPay (el webhook no lo dice). Usar en ROOT. */
+    @Query("select p.hospitalId from Payment p where p.openpayTransactionId = :transactionId")
+    List<Long> findHospitalIdsByOpenpayTransactionId(@Param("transactionId") String transactionId);
+
     /** Cobros de un corte de caja con cita, doctor, paciente y quién cobró ya cargados. */
     @Query("""
             SELECT p FROM Payment p

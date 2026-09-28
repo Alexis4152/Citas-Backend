@@ -1,5 +1,5 @@
 package com.hospital.citas.enums;
 
 public enum RoleName {
-    ADMIN, RECEPTIONIST, DOCTOR, PATIENT
+    SUPER_ADMIN, ADMIN, RECEPTIONIST, DOCTOR, PATIENT
 }

@@ -7,6 +7,9 @@ import lombok.NoArgsConstructor;
 
 @Data @Builder @NoArgsConstructor @AllArgsConstructor
 public class HospitalConfigResponse {
+    /** Hospital dueño de esta configuración y su slug (el de su link /c/<slug>). */
+    private Long hospitalId;
+    private String slug;
     private String name;
     private String logoUrl;
     private String primaryColor;

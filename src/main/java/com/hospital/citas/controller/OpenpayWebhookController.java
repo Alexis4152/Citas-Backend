@@ -1,5 +1,11 @@
 package com.hospital.citas.controller;
 
+import java.util.List;
+
+import com.hospital.citas.repository.PaymentRepository;
+
+import com.hospital.citas.tenant.TenantContext;
+
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.hospital.citas.payment.OpenpayProperties;
 import com.hospital.citas.service.PaymentService;
@@ -26,6 +32,7 @@ public class OpenpayWebhookController {
     private static final Logger log = LoggerFactory.getLogger(OpenpayWebhookController.class);
 
     private final PaymentService paymentService;
+    private final PaymentRepository paymentRepository;
     private final OpenpayProperties properties;
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -43,8 +50,16 @@ public class OpenpayWebhookController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         if (payload != null && payload.transaction() != null && payload.transaction().id() != null) {
-            paymentService.processWebhook(payload.type(), payload.transaction().id(),
-                    payload.transaction().authorization(), payload.transaction().errorMessage());
+            String transactionId = payload.transaction().id();
+            // OpenPay no dice de qué hospital es: se busca el dueño del cobro y se procesa como ese hospital.
+            List<Long> owners = TenantContext.callAs(TenantContext.ROOT,
+                    () -> paymentRepository.findHospitalIdsByOpenpayTransactionId(transactionId));
+            if (owners.isEmpty()) {
+                log.warn("Webhook de OpenPay para una transacción desconocida: {}", transactionId);
+            } else {
+                TenantContext.runAs(owners.get(0), () -> paymentService.processWebhook(payload.type(), transactionId,
+                        payload.transaction().authorization(), payload.transaction().errorMessage()));
+            }
         }
         // Siempre 200 para que OpenPay no siga reintentando eventos que no aplican.
         return ResponseEntity.ok().build();

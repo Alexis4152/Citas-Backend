@@ -1,5 +1,7 @@
 package com.hospital.citas.service.impl;
 
+import com.hospital.citas.tenant.TenantLinks;
+
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.WriterException;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
@@ -89,8 +91,8 @@ public class AppointmentReceiptServiceImpl implements AppointmentReceiptService 
     @Value("${app.uploads.dir}")
     private String uploadsDir;
 
-    @Value("${app.frontend-url}")
-    private String frontendUrl;
+    // Enlace del QR: lleva el link del hospital (/c/<slug>).
+    private final TenantLinks tenantLinks;
 
     @Override
     public byte[] build(Appointment appointment) {
@@ -664,7 +666,7 @@ public class AppointmentReceiptServiceImpl implements AppointmentReceiptService 
 
     private PDImageXObject buildQrCode(PDDocument document, Appointment appointment) {
         try {
-            String content = frontendUrl + "/cita-confirmada?token=" + appointment.getCancelToken();
+            String content = tenantLinks.frontendBase() + "/cita-confirmada?token=" + appointment.getCancelToken();
             BitMatrix matrix = new QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, 300, 300);
             BufferedImage image = MatrixToImageWriter.toBufferedImage(matrix);
             return LosslessFactory.createFromImage(document, image);

@@ -1,5 +1,13 @@
 package com.hospital.citas.service.impl;
 
+import java.util.concurrent.ConcurrentHashMap;
+
+import java.util.Map;
+
+import com.hospital.citas.tenant.HospitalDirectory;
+
+import com.hospital.citas.tenant.TenantContext;
+
 import com.hospital.citas.dto.request.HospitalConfigRequest;
 import com.hospital.citas.dto.response.HospitalConfigResponse;
 import com.hospital.citas.entity.HospitalConfig;
@@ -29,13 +37,13 @@ public class HospitalConfigServiceImpl implements HospitalConfigService {
     private final HospitalConfigRepository hospitalConfigRepository;
     private final HospitalConfigMapper hospitalConfigMapper;
     private final FileStorageService fileStorageService;
+    private final HospitalDirectory hospitalDirectory;
 
-    // Config de un solo renglón, leída MUCHAS veces (cada correo, cada PDF de comprobante)
-    // y escrita casi nunca (solo desde /admin/configuracion) -- sin esto, cada envío de
-    // correo o generación de PDF hacía su propio SELECT completo a esta tabla. `volatile`
-    // alcanza porque solo hay una instancia de este bean y la única invalidación es
-    // reemplazar la referencia completa tras guardar (ver update()/updateLogo()).
-    private volatile HospitalConfig cachedConfig;
+    // Un renglón por hospital, leído MUCHAS veces (cada correo, cada PDF de comprobante) y
+    // escrito casi nunca (solo desde /admin/configuracion) -- sin esto, cada envío de correo
+    // o generación de PDF hacía su propio SELECT a esta tabla. La llave es el hospital: cada
+    // uno ve solo su nombre, logo y color.
+    private final Map<Long, HospitalConfig> cache = new ConcurrentHashMap<>();
 
     @Override
     public HospitalConfigResponse get() {
@@ -55,7 +63,7 @@ public class HospitalConfigServiceImpl implements HospitalConfigService {
         config.setUpdatedAt(LocalDateTime.now());
         config.setUpdatedBy(SecurityUtils.getCurrentUserOrNull());
         HospitalConfig saved = hospitalConfigRepository.save(config);
-        cachedConfig = saved;
+        cache.put(saved.getHospitalId(), saved);
         return hospitalConfigMapper.toResponse(saved);
     }
 
@@ -68,23 +76,25 @@ public class HospitalConfigServiceImpl implements HospitalConfigService {
         config.setUpdatedAt(LocalDateTime.now());
         config.setUpdatedBy(SecurityUtils.getCurrentUserOrNull());
         HospitalConfig saved = hospitalConfigRepository.save(config);
-        cachedConfig = saved;
+        cache.put(saved.getHospitalId(), saved);
         return hospitalConfigMapper.toResponse(saved);
     }
 
     @Override
     public HospitalConfig getEntity() {
-        HospitalConfig cached = cachedConfig;
+        long hospitalId = TenantContext.requireHospitalId();
+        HospitalConfig cached = cache.get(hospitalId);
         if (cached != null) {
             return cached;
         }
+        // findAll() ya viene filtrado por el hospital actual (@TenantId): a lo más un renglón.
         HospitalConfig loaded = hospitalConfigRepository.findAll().stream().findFirst()
                 .orElseGet(() -> hospitalConfigRepository.save(HospitalConfig.builder()
-                        .name("Hospital Central")
+                        .name(hospitalDirectory.current().getName())
                         .primaryColor("#0F766E")
                         .updatedAt(LocalDateTime.now())
                         .build()));
-        cachedConfig = loaded;
+        cache.put(hospitalId, loaded);
         return loaded;
     }
 }

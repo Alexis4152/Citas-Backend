@@ -1,5 +1,6 @@
 package com.hospital.citas.entity;
 
+import com.hospital.citas.tenant.TenantEntity;
 import com.hospital.citas.enums.AppointmentStatus;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
@@ -13,7 +14,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "appointment_status_history")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class AppointmentStatusHistory {
+public class AppointmentStatusHistory extends TenantEntity {
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

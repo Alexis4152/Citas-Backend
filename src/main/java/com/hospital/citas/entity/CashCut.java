@@ -1,5 +1,6 @@
 package com.hospital.citas.entity;
 
+import com.hospital.citas.tenant.TenantEntity;
 import com.hospital.citas.enums.CashCutStatus;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
@@ -17,7 +18,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "cash_cuts")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class CashCut {
+public class CashCut extends TenantEntity {
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

@@ -1,5 +1,6 @@
 package com.hospital.citas.entity;
 
+import com.hospital.citas.tenant.TenantEntity;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -13,7 +14,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "hospital_config")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class HospitalConfig {
+public class HospitalConfig extends TenantEntity {
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

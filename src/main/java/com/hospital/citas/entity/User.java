@@ -35,7 +35,8 @@ public class User extends AuditableEntity implements UserDetails {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true, length = 150)
+    // Único por hospital (el mismo correo puede tener cuenta en dos hospitales distintos).
+    @Column(nullable = false, length = 150)
     private String email;
 
     @Column(name = "password_hash", nullable = false)

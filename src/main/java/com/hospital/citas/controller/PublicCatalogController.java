@@ -35,6 +35,14 @@ public class PublicCatalogController {
         return ApiResponse.ok(hospitalConfigService.get());
     }
 
+    /** Hospital al que pertenece una cita por su token (el filtro ya fijó ese hospital a partir
+     * del token -- ver TokenTenantResolver). El frontend lo usa para mandar los enlaces viejos,
+     * sin /c/<slug>, al link correcto del hospital. */
+    @GetMapping("/appointment-hospital/{token}")
+    public ApiResponse<HospitalConfigResponse> appointmentHospital(@PathVariable java.util.UUID token) {
+        return ApiResponse.ok(hospitalConfigService.get());
+    }
+
     @GetMapping("/branches")
     public ApiResponse<List<BranchResponse>> branches() {
         return ApiResponse.ok(branchService.listActive());

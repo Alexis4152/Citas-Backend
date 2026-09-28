@@ -1,5 +1,7 @@
 package com.hospital.citas.service.impl;
 
+import com.hospital.citas.tenant.TenantLinks;
+
 import com.hospital.citas.entity.Appointment;
 import com.hospital.citas.entity.EmailConfig;
 import com.hospital.citas.entity.HospitalConfig;
@@ -60,6 +62,7 @@ public class EmailServiceImpl implements EmailService {
 
     private final EmailConfigService emailConfigService;
     private final HospitalConfigService hospitalConfigService;
+    private final TenantLinks tenantLinks;
     private final UserRepository userRepository;
 
     @Override
@@ -195,6 +198,8 @@ public class EmailServiceImpl implements EmailService {
         }
         try {
             HospitalConfig hospital = hospitalConfigService.getEntity();
+            // Cada hospital tiene su propio enlace: el personal inicia sesión desde /c/<slug>/login.
+            String loginUrl = tenantLinks.frontendBase() + "/login";
             String subject = "Tu cuenta en " + hospital.getName();
             String html = """
                     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;">
@@ -204,10 +209,11 @@ public class EmailServiceImpl implements EmailService {
                         <li><strong>Correo:</strong> %s</li>
                         <li><strong>Contraseña temporal:</strong> %s</li>
                       </ul>
+                      <p>Entra aquí: <a href="%s" style="color:%s;">%s</a></p>
                       <p>Por seguridad, se te pedirá cambiarla la primera vez que inicies sesión.</p>
                     </div>
                     """.formatted(color(hospital), subject, user.getFirstName(), hospital.getName(),
-                    user.getEmail(), temporaryPassword);
+                    user.getEmail(), temporaryPassword, loginUrl, color(hospital), loginUrl);
             send(mailConfig, user.getEmail(), subject, html, (String) null, null);
             log.info("Contraseña temporal enviada a {}", user.getEmail());
         } catch (Exception e) {

@@ -1,5 +1,7 @@
 package com.hospital.citas.config;
 
+import com.hospital.citas.tenant.TenantContext;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
@@ -32,6 +34,12 @@ public class AsyncConfig {
         executor.setMaxPoolSize(8);
         executor.setQueueCapacity(200);
         executor.setThreadNamePrefix("notif-");
+        // El correo sale en otro hilo: se lleva el hospital de quien lo mandó para usar SU
+        // configuración de SMTP, su nombre y logo, y armar enlaces con su link (/c/<slug>).
+        executor.setTaskDecorator(task -> {
+            long tenant = TenantContext.get();
+            return () -> TenantContext.runAs(tenant, task);
+        });
         executor.initialize();
         return executor;
     }
