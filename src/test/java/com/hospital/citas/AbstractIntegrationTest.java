@@ -117,6 +117,16 @@ public abstract class AbstractIntegrationTest {
         return "http://localhost:" + port + path;
     }
 
+    /** Sufijo aleatorio solo con letras: los nombres de personas no admiten dígitos. */
+    protected static String randomLetters(int length) {
+        java.util.concurrent.ThreadLocalRandom random = java.util.concurrent.ThreadLocalRandom.current();
+        StringBuilder sb = new StringBuilder(length);
+        for (int i = 0; i < length; i++) {
+            sb.append((char) ('a' + random.nextInt(26)));
+        }
+        return sb.toString();
+    }
+
     protected User createUser(String email, String rawPassword, RoleName roleName) {
         Role role = roleRepository.findByName(roleName).orElseThrow();
         User user = User.builder()

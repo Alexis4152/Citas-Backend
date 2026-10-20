@@ -84,9 +84,15 @@ public interface AppointmentService {
     /**
      * Módulo de cobro de recepción: encuentra citas por lo que escanee o escriba -- el QR del
      * comprobante (su URL o su código), el folio (#123) o el nombre/teléfono del paciente. Sin
-     * texto devuelve la cola de cobro (atendidas sin pagar + programadas de hoy sin pagar).
+     * texto devuelve la cola de cobro: atendidas sin pagar y programadas de hoy sin pagar cuyo
+     * paciente ya llegó (las que no han llegado se confirman en {@link #listToConfirmArrival}).
      */
     List<AppointmentResponse> lookupForCharge(String q);
+
+    /** "Confirma si llegó": programadas cuya hora de inicio ya pasó y a las que nadie les
+     * registró la llegada (últimos 30 días, las más viejas primero). Mismo alcance que el cobro:
+     * el doctor solo las suyas, la recepcionista las de sus especialidades. */
+    List<AppointmentResponse> listToConfirmArrival();
 
     // ── Comprobante en PDF (patrones 09/11) ─────────────────────────
     // Cada método reutiliza la MISMA verificación de dueño que ya aplican los demás métodos

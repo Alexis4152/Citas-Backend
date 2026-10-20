@@ -35,6 +35,12 @@ public class FileStorageServiceImpl implements FileStorageService {
             throw new BusinessException("Formato de archivo no permitido (" + String.join(", ", allowedExtensions) + ")");
         }
 
+        // La extensión la pone quien sube el archivo: se verifica que el contenido de verdad sea
+        // una imagen de ese tipo (firma de bytes), para que nadie suba otra cosa renombrada.
+        if (!contentMatchesExtension(file, extension)) {
+            throw new BusinessException("El archivo no es una imagen válida (" + String.join(", ", allowedExtensions) + ")");
+        }
+
         try {
             Path targetDir = Paths.get(uploadsDir, subfolder);
             Files.createDirectories(targetDir);
@@ -47,6 +53,23 @@ public class FileStorageServiceImpl implements FileStorageService {
         } catch (IOException e) {
             throw new BusinessException("No se pudo guardar el archivo");
         }
+    }
+
+    private boolean contentMatchesExtension(MultipartFile file, String extension) {
+        byte[] head = new byte[12];
+        int read;
+        try (InputStream in = file.getInputStream()) {
+            read = in.readNBytes(head, 0, head.length);
+        } catch (IOException e) {
+            return false;
+        }
+        return switch (extension) {
+            case "jpg", "jpeg" -> read >= 3 && (head[0] & 0xFF) == 0xFF && (head[1] & 0xFF) == 0xD8 && (head[2] & 0xFF) == 0xFF;
+            case "png" -> read >= 8 && (head[0] & 0xFF) == 0x89 && head[1] == 'P' && head[2] == 'N' && head[3] == 'G';
+            case "webp" -> read >= 12 && head[0] == 'R' && head[1] == 'I' && head[2] == 'F' && head[3] == 'F'
+                    && head[8] == 'W' && head[9] == 'E' && head[10] == 'B' && head[11] == 'P';
+            default -> false;
+        };
     }
 
     private String extensionOf(String originalFilename) {

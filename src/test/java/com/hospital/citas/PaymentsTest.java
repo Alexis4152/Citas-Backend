@@ -60,7 +60,7 @@ class PaymentsTest extends AbstractIntegrationTest {
     private AppointmentResponse bookGuest(Doctor doctor, LocalDate date, LocalTime time) {
         GuestAppointmentRequest req = new GuestAppointmentRequest();
         req.setFirstName("Pago");
-        req.setLastName("Prueba-" + UUID.randomUUID().toString().substring(0, 6));
+        req.setLastName("Prueba-" + randomLetters(6));
         req.setPhone("55" + (10000000 + new java.util.Random().nextInt(89999999)));
         req.setDoctorId(doctor.getId());
         req.setBranchId(branchOf(doctor).getId());
@@ -91,7 +91,7 @@ class PaymentsTest extends AbstractIntegrationTest {
     }
 
     private Appointment insertAppointment(Doctor doctor, LocalDateTime start, AppointmentStatus status, String price) {
-        Patient patient = patientRepository.save(Patient.builder().firstName("Ins").lastName("Cobro-" + UUID.randomUUID().toString().substring(0, 5))
+        Patient patient = patientRepository.save(Patient.builder().firstName("Ins").lastName("Cobro-" + randomLetters(5))
                 .phone("55" + (10000000 + new java.util.Random().nextInt(89999999))).build());
         return appointmentRepository.save(Appointment.builder()
                 .doctor(doctor).branch(branchOf(doctor)).patient(patient)
@@ -363,7 +363,10 @@ class PaymentsTest extends AbstractIntegrationTest {
         assertThat(lookup(String.valueOf(appt.getId()), reception)).hasSize(1);
         // Nombre del paciente.
         assertThat(lookup(patientLastName, reception)).extracting(AppointmentResponse::getId).contains(appt.getId());
-        // Sin texto: la cola de cobro incluye las programadas de hoy sin pagar.
+        // Sin texto: la cola de cobro solo trae las programadas de hoy cuyo paciente ya llegó.
+        assertThat(lookup("", reception)).extracting(AppointmentResponse::getId).doesNotContain(appt.getId());
+        assertThat(call(HttpMethod.PATCH, "/api/reception/appointments/" + appt.getId() + "/arrived", null, reception).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
         assertThat(lookup("", reception)).extracting(AppointmentResponse::getId).contains(appt.getId());
         // Algo inexistente no encuentra nada.
         assertThat(lookup("#987654321", reception)).isEmpty();

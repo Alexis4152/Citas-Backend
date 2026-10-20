@@ -24,8 +24,10 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException ex) {
-        String msg = ex.getBindingResult().getFieldErrors().stream()
-                .map(FieldError::getDefaultMessage)
+        // Errores de campo y de reglas entre campos (@AssertTrue de clase / validadores de clase).
+        String msg = ex.getBindingResult().getAllErrors().stream()
+                .map(org.springframework.validation.ObjectError::getDefaultMessage)
+                .distinct()
                 .collect(Collectors.joining(", "));
         return ResponseEntity.badRequest().body(ApiResponse.error(msg));
     }
@@ -45,6 +47,16 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.error(ex.getMessage()));
     }
 
+    /** 409 con {@code code=SLOT_HELD}: el frontend lo distingue de "ya reservado" para mostrar
+     * "alguien lo está apartando" y la hora en que se libera si no lo confirma. */
+    @ExceptionHandler(SlotHeldException.class)
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> handleSlotHeld(SlotHeldException ex) {
+        java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("code", "SLOT_HELD");
+        data.put("heldUntil", ex.getHeldUntil());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiResponse<>(false, ex.getMessage(), data));
+    }
+
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ApiResponse<Void>> handleDataIntegrity(DataIntegrityViolationException ex) {
         // Segunda linea de defensa: el indice unico parcial de appointments salto porque dos
@@ -58,6 +70,14 @@ public class GlobalExceptionHandler {
         // JSON mal formado o con un valor de tipo inválido (ej. una fecha mal escrita): es un
         // error del cliente (400), no del servidor.
         return ResponseEntity.badRequest().body(ApiResponse.error("El cuerpo de la solicitud no es válido"));
+    }
+
+    /** Parámetro o archivo faltante, o con un tipo inválido (ej. ?status=OTRO): error del cliente. */
+    @ExceptionHandler({org.springframework.web.multipart.support.MissingServletRequestPartException.class,
+            org.springframework.web.bind.MissingServletRequestParameterException.class,
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class})
+    public ResponseEntity<ApiResponse<Void>> handleBadParameter(Exception ex) {
+        return ResponseEntity.badRequest().body(ApiResponse.error("La solicitud está incompleta o tiene un dato inválido"));
     }
 
     @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
@@ -82,6 +102,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BadCredentialsException.class)
     public ResponseEntity<ApiResponse<Void>> handleBadCreds(BadCredentialsException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.error("Credenciales inválidas"));
+    }
+
+    /** Cuenta desactivada: Spring lo revisa ANTES que la contraseña, así que se responde igual que
+     * unas credenciales inválidas para no confirmar a un tercero que esa cuenta existe (antes
+     * terminaba en un 500). */
+    @ExceptionHandler(org.springframework.security.authentication.DisabledException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDisabled(org.springframework.security.authentication.DisabledException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.error("Credenciales inválidas"));
+    }
+
+    @ExceptionHandler(com.hospital.citas.security.PermissionService.PermissionDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePermissionDenied(RuntimeException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ApiResponse.error(ex.getMessage()));
     }
 
     @ExceptionHandler(InvalidRefreshTokenException.class)

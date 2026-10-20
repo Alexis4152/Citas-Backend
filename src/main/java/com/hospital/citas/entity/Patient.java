@@ -41,6 +41,37 @@ public class Patient extends AuditableEntity {
     /** "Ninguna" = respondió explícitamente que no tiene (distinto de null, que es un
      * registro de antes de este campo). Obligatorio en todo alta/agendado nuevo -- ver
      * MedicalInfoRequest. */
+    // Datos personales y de contacto (opcionales): edad en la receta, dirección para el expediente.
+    @Column(name = "birth_date")
+    private java.time.LocalDate birthDate;
+
+    @Column(length = 1)
+    private String sex;
+
+    @Column(length = 18)
+    private String curp;
+
+    @Column(name = "address_line", length = 200)
+    private String addressLine;
+
+    @Column(length = 120)
+    private String neighborhood;
+
+    @Column(length = 100)
+    private String city;
+
+    @Column(length = 80)
+    private String state;
+
+    @Column(name = "postal_code", length = 5)
+    private String postalCode;
+
+    @Column(name = "emergency_contact_name", length = 150)
+    private String emergencyContactName;
+
+    @Column(name = "emergency_contact_phone", length = 10)
+    private String emergencyContactPhone;
+
     @Column(length = 150)
     private String allergies;
 

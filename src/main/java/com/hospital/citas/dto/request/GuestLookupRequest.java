@@ -16,10 +16,12 @@ public class GuestLookupRequest {
 
     @NotBlank(message = "El nombre es obligatorio")
     @Size(max = 100, message = "El nombre no puede superar 100 caracteres")
+    @jakarta.validation.constraints.Pattern(regexp = com.hospital.citas.util.ValidationPatterns.NAME_REGEXP, message = com.hospital.citas.util.ValidationPatterns.NAME_MESSAGE)
     private String firstName;
 
     @NotBlank(message = "El apellido es obligatorio")
     @Size(max = 100, message = "El apellido no puede superar 100 caracteres")
+    @jakarta.validation.constraints.Pattern(regexp = com.hospital.citas.util.ValidationPatterns.NAME_REGEXP, message = com.hospital.citas.util.ValidationPatterns.NAME_MESSAGE)
     private String lastName;
 
     /** Opcionales, y van juntos: con la fecha y hora exactas de la cita el invitado que NO dejó
@@ -27,4 +29,9 @@ public class GuestLookupRequest {
      * además de teléfono y nombre). Sin ellos, los enlaces se mandan al correo registrado. */
     private java.time.LocalDate appointmentDate;
     private java.time.LocalTime startTime;
+
+    @jakarta.validation.constraints.AssertTrue(message = "Para entrar directo a tu cita indica la fecha y la hora (o ninguna de las dos)")
+    public boolean isDateAndTimeTogether() {
+        return (appointmentDate == null) == (startTime == null);
+    }
 }

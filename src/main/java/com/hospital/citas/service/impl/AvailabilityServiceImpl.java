@@ -9,6 +9,7 @@ import com.hospital.citas.repository.AppointmentRepository;
 import com.hospital.citas.repository.DoctorRepository;
 import com.hospital.citas.repository.DoctorScheduleExceptionRepository;
 import com.hospital.citas.repository.DoctorScheduleRepository;
+import com.hospital.citas.repository.SlotHoldRepository;
 import com.hospital.citas.service.AvailabilityService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -35,6 +36,11 @@ public class AvailabilityServiceImpl implements AvailabilityService {
     private final DoctorScheduleRepository doctorScheduleRepository;
     private final DoctorScheduleExceptionRepository doctorScheduleExceptionRepository;
     private final AppointmentRepository appointmentRepository;
+    private final SlotHoldRepository slotHoldRepository;
+
+    /** Máximo de días por consulta de disponibilidad (el calendario pide 7): sin tope,
+     * {@code ?days=100000} haría miles de consultas en una sola petición pública. */
+    private static final int MAX_DAYS = 31;
 
     /** Ningún horario del público (invitado o paciente registrado) se puede elegir si ya pasó
      * o si está a menos de 30 minutos de "ahora" -- no tiene sentido ofrecer un slot que el
@@ -58,6 +64,14 @@ public class AvailabilityServiceImpl implements AvailabilityService {
     @Override
     @Transactional(readOnly = true)
     public List<DayAvailabilityResponse> getAvailability(Long doctorId, LocalDate from, int days, boolean staffMode) {
+        return getAvailability(doctorId, from, days, staffMode, null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<DayAvailabilityResponse> getAvailability(Long doctorId, LocalDate from, int days, boolean staffMode,
+                                                         String holderKey) {
+        days = Math.min(Math.max(days, 1), MAX_DAYS);
         Doctor doctor = doctorRepository.findByIdAndIsActiveTrue(doctorId)
                 .orElseThrow(() -> new ResourceNotFoundException("Doctor no encontrado: " + doctorId));
 
@@ -71,6 +85,12 @@ public class AvailabilityServiceImpl implements AvailabilityService {
             occupiedByDate.computeIfAbsent(appt.getAppointmentDate(), d -> new ArrayList<>()).add(appt);
         }
 
+        // Horarios que alguien está apartando en este momento (ver SlotHold).
+        Map<LocalDate, List<SlotHold>> heldByDate = new HashMap<>();
+        for (SlotHold hold : slotHoldRepository.findActive(doctorId, from, to, now)) {
+            heldByDate.computeIfAbsent(hold.getHoldDate(), d -> new ArrayList<>()).add(hold);
+        }
+
         List<DayAvailabilityResponse> result = new ArrayList<>();
         for (int i = 0; i < Math.max(days, 1); i++) {
             LocalDate date = from.plusDays(i);
@@ -82,6 +102,7 @@ public class AvailabilityServiceImpl implements AvailabilityService {
                     .toList();
             boolean blockedAllDay = dayExceptions.stream().anyMatch(e -> Boolean.TRUE.equals(e.getAllDay()));
             List<Appointment> dayOccupied = occupiedByDate.getOrDefault(date, List.of());
+            List<SlotHold> dayHolds = heldByDate.getOrDefault(date, List.of());
 
             LinkedHashMap<LocalTime, SlotResponse> slots = new LinkedHashMap<>();
             for (DoctorSchedule schedule : schedules) {
@@ -104,11 +125,18 @@ public class AvailabilityServiceImpl implements AvailabilityService {
                     boolean bookableInTime = staffMode
                             ? LocalDateTime.of(date, slotEnd).isAfter(earliestBookable)
                             : !LocalDateTime.of(date, cursor).isBefore(earliestBookable);
-                    boolean available = !blocked && !occupied && bookableInTime;
-                    boolean overbookable = staffMode && !blocked && occupied && bookableInTime;
+                    boolean heldByMe = holderKey != null && dayHolds.stream()
+                            .anyMatch(h -> h.overlaps(slotStart, slotEnd) && holderKey.equals(h.getHolderKey()));
+                    boolean held = !occupied && dayHolds.stream()
+                            .anyMatch(h -> h.overlaps(slotStart, slotEnd) && !h.getHolderKey().equals(holderKey));
+                    boolean available = !blocked && !occupied && !held && bookableInTime;
+                    // Recepción puede empalmar sobre una cita, o sobre un horario que alguien aparta en línea.
+                    boolean overbookable = staffMode && !blocked && (occupied || held) && bookableInTime;
                     slots.merge(cursor,
                             SlotResponse.builder().startTime(cursor).endTime(slotEnd)
-                                    .available(available).overbookable(overbookable).build(),
+                                    .available(available).overbookable(overbookable)
+                                    .held(held && !blocked && bookableInTime)
+                                    .heldByMe(heldByMe && available).build(),
                             (existing, incoming) -> existing.isAvailable() ? incoming : existing);
                     cursor = slotEnd;
                 }

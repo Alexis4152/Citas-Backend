@@ -1,7 +1,5 @@
 package com.hospital.citas.service.impl;
 
-import com.hospital.citas.tenant.TenantLinks;
-
 import com.hospital.citas.entity.Appointment;
 import com.hospital.citas.entity.EmailConfig;
 import com.hospital.citas.entity.HospitalConfig;
@@ -12,462 +10,366 @@ import com.hospital.citas.repository.UserRepository;
 import com.hospital.citas.service.EmailConfigService;
 import com.hospital.citas.service.EmailService;
 import com.hospital.citas.service.HospitalConfigService;
+import com.hospital.citas.service.mail.EmailTemplate;
+import com.hospital.citas.service.mail.EmailTemplate.Tone;
+import com.hospital.citas.tenant.TenantLinks;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.text.NumberFormat;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Properties;
 
+import static com.hospital.citas.service.mail.EmailTemplate.esc;
+
 /**
- * Envía las notificaciones de citas (confirmación, aviso al doctor/recepción/admin,
- * cancelación) por correo, con el comprobante en PDF adjunto cuando se generó (ver
- * AppointmentServiceImpl -- el adjunto es opcional, nunca bloquea el envío). La
- * configuración SMTP se lee de la tabla {@code email_config} en cada envío (vía
- * {@link EmailConfigService}) en vez de propiedades estáticas de Spring — así el ADMIN puede
- * capturar/cambiar las credenciales desde {@code /api/admin/email-config} sin reiniciar el
- * Backend.
+ * Correos de la plataforma (confirmación, recordatorio, cancelación, reprogramación, avisos al
+ * personal, accesos y recetas), con el diseño de {@link EmailTemplate}. La configuración SMTP se
+ * lee de {@code email_config} del hospital en cada envío, así el ADMIN la cambia sin reiniciar.
  * <p>
- * Nunca deja que una falla de SMTP tumbe el agendado/cancelación: cada método atrapa sus
- * propias excepciones y solo registra en el log.
+ * Nunca deja que una falla de SMTP tumbe el agendado o la cancelación: cada método atrapa sus
+ * propias excepciones y solo registra en el log. Cada correo va en HTML y en texto plano.
  */
 @Service
 @RequiredArgsConstructor
 public class EmailServiceImpl implements EmailService {
 
     private static final Logger log = LoggerFactory.getLogger(EmailServiceImpl.class);
+    private static final Locale MX = Locale.forLanguageTag("es-MX");
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    private static final DateTimeFormatter LONG_DATE = DateTimeFormatter.ofPattern("EEEE d 'de' MMMM", MX);
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm");
 
-    /** Respaldo cuando la especialidad del doctor no tiene recomendaciones propias
-     * capturadas (ver Specialty#recommendations, editable desde /admin/especialidades). */
-    private static final String DEFAULT_RECOMMENDATIONS =
-            "Llega 15 minutos antes de tu cita, trae una identificación oficial, "
-            + "y si no vas a poder asistir cancela con al menos 24 horas de anticipación para "
-            + "liberar el espacio a otro paciente.";
-
-    private String recommendationsFor(Appointment appointment) {
-        String custom = appointment.getDoctor().getSpecialty().getRecommendations();
-        String body = (custom != null && !custom.isBlank()) ? custom.trim() : DEFAULT_RECOMMENDATIONS;
-        return "Recomendaciones: " + body;
-    }
+    /** Respaldo cuando la especialidad no tiene recomendaciones propias (ver Specialty#recommendations). */
+    private static final String DEFAULT_RECOMMENDATIONS = "Llega 15 minutos antes de tu cita • Trae una identificación oficial "
+            + "• Si no vas a poder asistir, cancela con al menos 24 horas de anticipación para liberar el espacio";
 
     private final EmailConfigService emailConfigService;
     private final HospitalConfigService hospitalConfigService;
     private final TenantLinks tenantLinks;
     private final UserRepository userRepository;
 
+    @Value("${app.public-url:}")
+    private String publicUrl;
+
+    private enum Audience { DOCTOR, RECEPTION, ADMIN }
+
+    // ── Paciente ────────────────────────────────────────────────
+
     @Override
     @Async("notificationExecutor")
-    public void sendAppointmentConfirmationToPatient(Appointment appointment, byte[] receiptPdf) {
-        String to = appointment.getPatient().getEmail();
-        if (to == null || to.isBlank()) {
-            log.info("Cita {} sin correo de paciente capturado; se omite la confirmación", appointment.getId());
+    public void sendAppointmentConfirmationToPatient(Appointment a, byte[] receiptPdf) {
+        String to = a.getPatient().getEmail();
+        if (blank(to)) {
+            log.info("Cita {} sin correo de paciente; se omite la confirmación", a.getId());
             return;
         }
-        EmailConfig mailConfig = emailConfigService.getEntity();
-        if (!Boolean.TRUE.equals(mailConfig.getEnabled())) {
-            log.info("Envío de correo deshabilitado; se omite confirmación de la cita {}", appointment.getId());
-            return;
-        }
-        try {
-            HospitalConfig hospital = hospitalConfigService.getEntity();
-            String subject = "Confirmación de tu cita — " + hospital.getName();
-            String html = """
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;">
-                      <h2 style="color:%s;">%s</h2>
-                      <p>Hola %s, tu cita fue agendada con éxito:</p>
-                      <ul>
-                        <li><strong>Doctor:</strong> %s %s (%s)</li>
-                        <li><strong>Sede:</strong> %s — %s</li>
-                        <li><strong>Fecha:</strong> %s</li>
-                        <li><strong>Hora:</strong> %s</li>
-                      </ul>
-                      <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
-                      <p style="color:#6b7280;font-size:13px;text-align:justify;">%s</p>
-                    </div>
-                    """.formatted(
-                    color(hospital), hospital.getName(), appointment.getPatient().getFirstName(),
-                    appointment.getDoctor().getUser().getFirstName(), appointment.getDoctor().getUser().getLastName(),
-                    appointment.getDoctor().getSpecialty().getName(),
-                    appointment.getBranch().getName(), nullSafe(appointment.getBranch().getAddress()),
-                    appointment.getAppointmentDate().format(DATE_FMT), appointment.getStartTime().format(TIME_FMT),
-                    recommendationsFor(appointment));
-            send(mailConfig, to, subject, html, appointment.getId(), receiptPdf);
-            log.info("Confirmación de la cita {} enviada a {}", appointment.getId(), to);
-        } catch (Exception e) {
-            log.error("No se pudo enviar la confirmación de la cita {} a {}", appointment.getId(), to, e);
-        }
+        deliver(to, "Tu cita está confirmada", a.getId(), receiptPdf, h -> new EmailTemplate(h.getPrimaryColor())
+                .preheader("Dr(a). " + a.getDoctor().getUser().getLastName() + " · " + a.getAppointmentDate().format(LONG_DATE)
+                        + " a las " + a.getStartTime().format(TIME_FMT))
+                .hero("&#10003;", Tone.SUCCESS, "Cita confirmada", "¡Listo, " + a.getPatient().getFirstName() + "! Tu cita quedó agendada",
+                        "Te esperamos en la fecha y hora de abajo. Adjuntamos tu comprobante con el código QR para recepción.")
+                .appointmentCard(a, false)
+                .rows(appointmentRows(a))
+                .button("Ver, reprogramar o cancelar", manageUrl(a))
+                .links(List.of(new String[]{"Agregar a mi calendario", EmailTemplate.googleCalendarUrl(a, h.getName())},
+                        new String[]{"Cómo llegar", EmailTemplate.mapsUrl(a)}))
+                .checklist("Antes de tu cita", recommendations(a))
+                .build(h.getName(), logoUrl(h), contact(h), "Recibes este correo porque agendaste una cita en " + h.getName() + "."));
     }
 
     @Override
     @Async("notificationExecutor")
-    public void sendGuestAppointmentLinks(String to, String firstName, java.util.List<Appointment> appointments, String frontendUrl) {
-        EmailConfig mailConfig = emailConfigService.getEntity();
-        if (!Boolean.TRUE.equals(mailConfig.getEnabled())) {
-            log.info("Envío de correo deshabilitado; se omiten los enlaces de citas de invitado");
-            return;
-        }
-        try {
-            HospitalConfig hospital = hospitalConfigService.getEntity();
-            StringBuilder items = new StringBuilder();
-            for (Appointment a : appointments) {
-                items.append("<li style=\"margin-bottom:10px;\"><strong>")
-                        .append(a.getAppointmentDate().format(DATE_FMT)).append(" ")
-                        .append(a.getStartTime().format(TIME_FMT)).append("</strong> — ")
-                        .append(a.getDoctor().getUser().getFirstName()).append(" ")
-                        .append(a.getDoctor().getUser().getLastName()).append(" (")
-                        .append(a.getDoctor().getSpecialty().getName()).append(")<br>")
-                        .append("<a href=\"").append(frontendUrl).append("/cancelar-cita/").append(a.getCancelToken())
-                        .append("\" style=\"color:").append(color(hospital)).append(";\">Ver, reprogramar o cancelar esta cita</a></li>");
+    public void sendAppointmentReminder(Appointment a) {
+        String to = a.getPatient().getEmail();
+        if (blank(to)) return;
+        deliver(to, "Recordatorio: tu cita es en 2 horas", null, null, h -> new EmailTemplate(h.getPrimaryColor())
+                .preheader("Hoy a las " + a.getStartTime().format(TIME_FMT) + " con Dr(a). " + a.getDoctor().getUser().getLastName())
+                .hero("&#9200;", Tone.WARNING, "Recordatorio", "Tu cita es en 2 horas",
+                        "Hola " + esc(a.getPatient().getFirstName()) + ", te esperamos hoy. Si ya no puedes asistir, avísanos para liberar el espacio.")
+                .appointmentCard(a, false)
+                .button("Cómo llegar", EmailTemplate.mapsUrl(a))
+                .links(List.<String[]>of(new String[]{"Ya no puedo ir: cancelar o reprogramar", manageUrl(a)}))
+                .checklist("No olvides", recommendations(a))
+                .build(h.getName(), logoUrl(h), contact(h), "Recibes este recordatorio porque tienes una cita programada hoy."));
+    }
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendCancellationNoticeToPatient(Appointment a, byte[] receiptPdf) {
+        String to = a.getPatient().getEmail();
+        if (blank(to)) return;
+        deliver(to, "Tu cita fue cancelada", a.getId(), receiptPdf, h -> {
+            EmailTemplate t = new EmailTemplate(h.getPrimaryColor())
+                    .preheader("Cita del " + a.getAppointmentDate().format(DATE_FMT) + " cancelada")
+                    .hero("&#10005;", Tone.DANGER, "Cita cancelada", "Tu cita fue cancelada",
+                            "Hola " + esc(a.getPatient().getFirstName()) + ", esta cita ya no está en la agenda del doctor y el horario quedó libre.")
+                    .appointmentCard(a, true);
+            if (!blank(a.getCancelReason())) {
+                t.notice(Tone.NEUTRAL, "Motivo", esc(a.getCancelReason()));
             }
-            String subject = "Tus citas programadas — " + hospital.getName();
-            String html = """
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;">
-                      <h2 style="color:%s;">Tus citas programadas</h2>
-                      <p>Hola %s, alguien solicitó recuperar el acceso a tus citas. Estos son los enlaces:</p>
-                      <ul style="padding-left:18px;">%s</ul>
-                      <p style="color:#6b7280;font-size:13px;text-align:justify;">Si no fuiste tú, ignora este correo: nadie más recibe esta información.</p>
-                    </div>
-                    """.formatted(color(hospital), firstName, items);
-            send(mailConfig, to, subject, html, (String) null, null);
-            log.info("Enlaces de citas de invitado enviados a {}", to);
-        } catch (Exception ex) {
-            log.error("No se pudieron enviar los enlaces de citas de invitado a {}", to, ex);
-        }
+            String payment = a.getPaymentStatus() != null ? a.getPaymentStatus().name() : "UNPAID";
+            if ("REFUNDED".equals(payment)) {
+                t.notice(Tone.SUCCESS, "Reembolso", "Te reembolsamos el pago anticipado. Según tu banco, puede tardar algunos días en reflejarse.");
+            } else if ("PAID".equals(payment) || "PENDING".equals(payment)) {
+                t.notice(Tone.WARNING, "Tu pago anticipado", "El hospital revisará el reembolso y te avisará. Si tienes dudas, contáctanos.");
+            }
+            return t.button("Agendar una nueva cita", tenantLinks.frontendBase() + "/agendar")
+                    .build(h.getName(), logoUrl(h), contact(h), "Recibes este correo porque tenías una cita en " + h.getName() + ".");
+        });
     }
 
     @Override
     @Async("notificationExecutor")
-    public void sendAppointmentReminder(Appointment appointment) {
-        String to = appointment.getPatient().getEmail();
-        if (to == null || to.isBlank()) {
-            log.info("Cita {} sin correo de paciente capturado; se omite el recordatorio", appointment.getId());
-            return;
-        }
-        EmailConfig mailConfig = emailConfigService.getEntity();
-        if (!Boolean.TRUE.equals(mailConfig.getEnabled())) {
-            log.info("Envío de correo deshabilitado; se omite el recordatorio de la cita {}", appointment.getId());
-            return;
-        }
-        try {
-            HospitalConfig hospital = hospitalConfigService.getEntity();
-            String subject = "Recordatorio: tu cita es en 2 horas — " + hospital.getName();
-            String html = """
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;">
-                      <h2 style="color:%s;">Tu cita es en 2 horas</h2>
-                      <p>Hola %s, este es un recordatorio de tu próxima cita:</p>
-                      <ul>
-                        <li><strong>Doctor:</strong> %s %s (%s)</li>
-                        <li><strong>Sede:</strong> %s — %s</li>
-                        <li><strong>Fecha:</strong> %s</li>
-                        <li><strong>Hora:</strong> %s</li>
-                      </ul>
-                      <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
-                      <p style="color:#6b7280;font-size:13px;text-align:justify;">%s</p>
-                    </div>
-                    """.formatted(
-                    color(hospital), appointment.getPatient().getFirstName(),
-                    appointment.getDoctor().getUser().getFirstName(), appointment.getDoctor().getUser().getLastName(),
-                    appointment.getDoctor().getSpecialty().getName(),
-                    appointment.getBranch().getName(), nullSafe(appointment.getBranch().getAddress()),
-                    appointment.getAppointmentDate().format(DATE_FMT), appointment.getStartTime().format(TIME_FMT),
-                    recommendationsFor(appointment));
-            send(mailConfig, to, subject, html, (String) null, null);
-            log.info("Recordatorio de la cita {} enviado a {}", appointment.getId(), to);
-        } catch (Exception e) {
-            log.error("No se pudo enviar el recordatorio de la cita {} a {}", appointment.getId(), to, e);
-        }
+    public void sendRescheduleNoticeToPatient(Appointment a, LocalDate oldDate, LocalTime oldStartTime, byte[] receiptPdf) {
+        String to = a.getPatient().getEmail();
+        if (blank(to)) return;
+        deliver(to, "Tu cita cambió de horario", a.getId(), receiptPdf, h -> new EmailTemplate(h.getPrimaryColor())
+                .preheader("Nueva fecha: " + a.getAppointmentDate().format(LONG_DATE) + " a las " + a.getStartTime().format(TIME_FMT))
+                .hero("&#8635;", Tone.INFO, "Cita reprogramada", "Tu cita tiene nuevo horario",
+                        "Hola " + esc(a.getPatient().getFirstName()) + ", estos son los datos actualizados. Adjuntamos tu nuevo comprobante.")
+                .change(oldDate, oldStartTime, a)
+                .appointmentCard(a, false)
+                .button("Ver mi cita", manageUrl(a))
+                .links(List.<String[]>of(new String[]{"Agregar a mi calendario", EmailTemplate.googleCalendarUrl(a, h.getName())}))
+                .build(h.getName(), logoUrl(h), contact(h), "Recibes este correo porque tienes una cita en " + h.getName() + "."));
     }
 
     @Override
     @Async("notificationExecutor")
-    public void sendTemporaryCredentials(User user, String temporaryPassword) {
-        EmailConfig mailConfig = emailConfigService.getEntity();
-        if (!Boolean.TRUE.equals(mailConfig.getEnabled())) {
-            log.info("Envío de correo deshabilitado; el ADMIN debe comunicar la contraseña temporal de {} manualmente", user.getEmail());
-            return;
-        }
-        try {
-            HospitalConfig hospital = hospitalConfigService.getEntity();
-            // Cada hospital tiene su propio enlace: el personal inicia sesión desde /c/<slug>/login.
-            String loginUrl = tenantLinks.frontendBase() + "/login";
-            String subject = "Tu cuenta en " + hospital.getName();
-            String html = """
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;">
-                      <h2 style="color:%s;">%s</h2>
-                      <p>Hola %s, se creó una cuenta para ti en %s. Estos son tus datos de acceso:</p>
-                      <ul>
-                        <li><strong>Correo:</strong> %s</li>
-                        <li><strong>Contraseña temporal:</strong> %s</li>
-                      </ul>
-                      <p>Entra aquí: <a href="%s" style="color:%s;">%s</a></p>
-                      <p>Por seguridad, se te pedirá cambiarla la primera vez que inicies sesión.</p>
-                    </div>
-                    """.formatted(color(hospital), subject, user.getFirstName(), hospital.getName(),
-                    user.getEmail(), temporaryPassword, loginUrl, color(hospital), loginUrl);
-            send(mailConfig, user.getEmail(), subject, html, (String) null, null);
-            log.info("Contraseña temporal enviada a {}", user.getEmail());
-        } catch (Exception e) {
-            log.error("No se pudo enviar la contraseña temporal a {}", user.getEmail(), e);
-        }
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendPasswordResetEmail(User user, String resetUrl) {
-        EmailConfig mailConfig = emailConfigService.getEntity();
-        if (!Boolean.TRUE.equals(mailConfig.getEnabled())) {
-            log.info("Envío de correo deshabilitado; se omite el correo de recuperación de {}", user.getEmail());
-            return;
-        }
-        try {
-            HospitalConfig hospital = hospitalConfigService.getEntity();
-            String subject = "Recupera tu contraseña — " + hospital.getName();
-            String html = """
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;">
-                      <h2 style="color:%s;">%s</h2>
-                      <p>Hola %s, solicitaste restablecer tu contraseña. Este enlace es válido por 30 minutos:</p>
-                      <p><a href="%s" style="color:%s;">Restablecer mi contraseña</a></p>
-                      <p style="color:#6b7280;font-size:13px;">Si no solicitaste este cambio, ignora este correo.</p>
-                    </div>
-                    """.formatted(color(hospital), subject, user.getFirstName(), resetUrl, color(hospital));
-            send(mailConfig, user.getEmail(), subject, html, (String) null, null);
-            log.info("Correo de recuperación de contraseña enviado a {}", user.getEmail());
-        } catch (Exception e) {
-            log.error("No se pudo enviar el correo de recuperación a {}", user.getEmail(), e);
-        }
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendNewAppointmentNoticeToDoctor(Appointment appointment, byte[] receiptPdf) {
-        String to = appointment.getDoctor().getUser().getEmail();
-        sendStaffNotice(appointment, to, "Nueva cita agendada",
-                "Tienes una nueva cita agendada con " + appointment.getPatient().getFirstName()
-                        + " " + appointment.getPatient().getLastName() + ".", receiptPdf);
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendNewAppointmentNoticeToReceptionists(Appointment appointment, byte[] receiptPdf) {
-        for (User receptionist : userRepository.findByRole_NameAndIsActiveTrue(RoleName.RECEPTIONIST)) {
-            sendStaffNotice(appointment, receptionist.getEmail(), "Nueva cita agendada",
-                    "Se agendó una nueva cita para el Dr(a). " + appointment.getDoctor().getUser().getFirstName()
-                            + " " + appointment.getDoctor().getUser().getLastName() + ".", receiptPdf);
-        }
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendNewAppointmentNoticeToAdmins(Appointment appointment, byte[] receiptPdf) {
-        for (User admin : userRepository.findByRole_NameAndIsActiveTrue(RoleName.ADMIN)) {
-            sendStaffNotice(appointment, admin.getEmail(), "Nueva cita agendada",
-                    "Se agendó una nueva cita para el Dr(a). " + appointment.getDoctor().getUser().getFirstName()
-                            + " " + appointment.getDoctor().getUser().getLastName() + ".", receiptPdf);
-        }
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendCancellationNoticeToPatient(Appointment appointment, byte[] receiptPdf) {
-        String to = appointment.getPatient().getEmail();
-        if (to == null || to.isBlank()) {
-            return;
-        }
-        sendStaffNotice(appointment, to, "Cita cancelada", "Tu cita fue cancelada.", receiptPdf);
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendCancellationNoticeToDoctor(Appointment appointment, byte[] receiptPdf) {
-        sendStaffNotice(appointment, appointment.getDoctor().getUser().getEmail(), "Cita cancelada",
-                "La cita con " + appointment.getPatient().getFirstName() + " " + appointment.getPatient().getLastName()
-                        + " fue cancelada.", receiptPdf);
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendCancellationNoticeToReceptionists(Appointment appointment, byte[] receiptPdf) {
-        for (User receptionist : userRepository.findByRole_NameAndIsActiveTrue(RoleName.RECEPTIONIST)) {
-            sendStaffNotice(appointment, receptionist.getEmail(), "Cita cancelada",
-                    "Se canceló la cita del Dr(a). " + appointment.getDoctor().getUser().getFirstName()
-                            + " " + appointment.getDoctor().getUser().getLastName() + ".", receiptPdf);
-        }
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendCancellationNoticeToAdmins(Appointment appointment, byte[] receiptPdf) {
-        for (User admin : userRepository.findByRole_NameAndIsActiveTrue(RoleName.ADMIN)) {
-            sendStaffNotice(appointment, admin.getEmail(), "Cita cancelada",
-                    "Se canceló la cita del Dr(a). " + appointment.getDoctor().getUser().getFirstName()
-                            + " " + appointment.getDoctor().getUser().getLastName() + ".", receiptPdf);
-        }
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendRescheduleNoticeToPatient(Appointment appointment, LocalDate oldDate, LocalTime oldStartTime, byte[] receiptPdf) {
-        String to = appointment.getPatient().getEmail();
-        if (to == null || to.isBlank()) {
-            return;
-        }
-        sendRescheduleNotice(appointment, to, "Tu cita fue reprogramada.", oldDate, oldStartTime, receiptPdf);
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendRescheduleNoticeToDoctor(Appointment appointment, LocalDate oldDate, LocalTime oldStartTime, byte[] receiptPdf) {
-        sendRescheduleNotice(appointment, appointment.getDoctor().getUser().getEmail(),
-                "La cita con " + appointment.getPatient().getFirstName() + " " + appointment.getPatient().getLastName()
-                        + " fue reprogramada.", oldDate, oldStartTime, receiptPdf);
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendRescheduleNoticeToReceptionists(Appointment appointment, LocalDate oldDate, LocalTime oldStartTime, byte[] receiptPdf) {
-        for (User receptionist : userRepository.findByRole_NameAndIsActiveTrue(RoleName.RECEPTIONIST)) {
-            sendRescheduleNotice(appointment, receptionist.getEmail(),
-                    "Se reprogramó la cita del Dr(a). " + appointment.getDoctor().getUser().getFirstName()
-                            + " " + appointment.getDoctor().getUser().getLastName() + ".", oldDate, oldStartTime, receiptPdf);
-        }
-    }
-
-    @Override
-    @Async("notificationExecutor")
-    public void sendRescheduleNoticeToAdmins(Appointment appointment, LocalDate oldDate, LocalTime oldStartTime, byte[] receiptPdf) {
-        for (User admin : userRepository.findByRole_NameAndIsActiveTrue(RoleName.ADMIN)) {
-            sendRescheduleNotice(appointment, admin.getEmail(),
-                    "Se reprogramó la cita del Dr(a). " + appointment.getDoctor().getUser().getFirstName()
-                            + " " + appointment.getDoctor().getUser().getLastName() + ".", oldDate, oldStartTime, receiptPdf);
-        }
-    }
-
-    private void sendRescheduleNotice(Appointment appointment, String to, String introLine,
-                                       LocalDate oldDate, LocalTime oldStartTime, byte[] receiptPdf) {
-        if (to == null || to.isBlank()) {
-            return;
-        }
-        EmailConfig mailConfig = emailConfigService.getEntity();
-        if (!Boolean.TRUE.equals(mailConfig.getEnabled())) {
-            log.info("Envío de correo deshabilitado; se omite aviso de reprogramación de la cita {}", appointment.getId());
-            return;
-        }
-        try {
-            HospitalConfig hospital = hospitalConfigService.getEntity();
-            String subject = "Cita reprogramada — " + hospital.getName();
-            String html = """
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;">
-                      <h2 style="color:%s;">%s</h2>
-                      <p>%s</p>
-                      <ul>
-                        <li><strong>Paciente:</strong> %s %s</li>
-                        <li><strong>Fecha y hora anterior:</strong> %s, %s</li>
-                        <li><strong>Fecha y hora nueva:</strong> %s, %s</li>
-                        <li><strong>Sede:</strong> %s</li>
-                      </ul>
-                    </div>
-                    """.formatted(
-                    color(hospital), subject, introLine,
-                    appointment.getPatient().getFirstName(), appointment.getPatient().getLastName(),
-                    oldDate.format(DATE_FMT), oldStartTime.format(TIME_FMT),
-                    appointment.getAppointmentDate().format(DATE_FMT), appointment.getStartTime().format(TIME_FMT),
-                    appointment.getBranch().getName());
-            send(mailConfig, to, subject, html, appointment.getId(), receiptPdf);
-        } catch (Exception e) {
-            log.error("No se pudo enviar aviso de reprogramación de la cita {} a {}", appointment.getId(), to, e);
-        }
+    public void sendGuestAppointmentLinks(String to, String firstName, List<Appointment> appointments, String frontendUrl) {
+        deliver(to, "Tus citas programadas", null, null, h -> {
+            EmailTemplate t = new EmailTemplate(h.getPrimaryColor())
+                    .preheader("Enlaces para ver, reprogramar o cancelar tus citas")
+                    .hero("&#128279;", Tone.BRAND, "Acceso a tus citas", "Aquí están tus citas",
+                            "Hola " + esc(firstName) + ", alguien pidió recuperar el acceso a tus citas. Usa el botón de cada una para verla o cambiarla.");
+            for (Appointment a : appointments) {
+                t.appointmentCard(a, false).button("Abrir esta cita", frontendUrl + "/cancelar-cita/" + a.getCancelToken());
+            }
+            return t.notice(Tone.NEUTRAL, null, "Si no fuiste tú, ignora este correo: solo tú recibes estos enlaces.")
+                    .build(h.getName(), logoUrl(h), contact(h), "Recibes este correo porque se solicitó el acceso a tus citas.");
+        });
     }
 
     @Override
     @Async("notificationExecutor")
     public void sendPrescriptionToPatient(Prescription prescription, byte[] prescriptionPdf) {
-        Appointment appointment = prescription.getAppointment();
-        String to = appointment.getPatient().getEmail();
-        if (to == null || to.isBlank()) {
-            return;
+        Appointment a = prescription.getAppointment();
+        String to = a.getPatient().getEmail();
+        if (blank(to)) return;
+        deliverWithAttachment(to, "Tu receta médica", "receta-RX-" + String.format("%06d", prescription.getId()) + ".pdf", prescriptionPdf,
+                h -> new EmailTemplate(h.getPrimaryColor())
+                        .preheader("Receta de tu consulta del " + a.getAppointmentDate().format(DATE_FMT))
+                        .hero("Rx", Tone.BRAND, "Receta médica", "Tu receta está lista",
+                                "Hola " + esc(a.getPatient().getFirstName()) + ", adjuntamos en PDF la receta de tu consulta. Imprímela para surtirla.")
+                        .rows(List.of(
+                                new String[]{"Doctor", "Dr(a). " + esc(a.getDoctor().getUser().getFirstName() + " " + a.getDoctor().getUser().getLastName())},
+                                new String[]{"Especialidad", esc(a.getDoctor().getSpecialty().getName())},
+                                new String[]{"Consulta", esc(a.getAppointmentDate().format(DATE_FMT))},
+                                new String[]{"Folio", "RX-" + String.format("%06d", prescription.getId())}))
+                        .notice(Tone.WARNING, "Importante", "Sigue las indicaciones de tu doctor y no te automediques. "
+                                + "La receta solo es válida con la firma del médico.")
+                        .build(h.getName(), logoUrl(h), contact(h), "Recibes este correo porque te atendiste en " + h.getName() + "."));
+    }
+
+    // ── Accesos ─────────────────────────────────────────────────
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendTemporaryCredentials(User user, String temporaryPassword) {
+        String loginUrl = tenantLinks.frontendBase() + "/login";
+        deliver(user.getEmail(), "Tu cuenta está lista", null, null, h -> new EmailTemplate(h.getPrimaryColor())
+                .preheader("Tus datos de acceso a " + h.getName())
+                .hero("&#128273;", Tone.BRAND, "Bienvenida", "Hola " + user.getFirstName() + ", ya tienes acceso",
+                        "Se creó una cuenta para ti en <strong>" + esc(h.getName()) + "</strong>. Entra con estos datos; "
+                                + "te pediremos cambiar la contraseña la primera vez.")
+                .rows(List.<String[]>of(new String[]{"Correo", esc(user.getEmail())}))
+                .code("Contraseña temporal", temporaryPassword)
+                .button("Iniciar sesión", loginUrl)
+                .notice(Tone.NEUTRAL, null, "Guarda bien tu contraseña nueva. Nadie del hospital te la pedirá por teléfono ni por correo.")
+                .build(h.getName(), logoUrl(h), contact(h), "Recibes este correo porque un administrador creó tu cuenta."));
+    }
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendPasswordResetEmail(User user, String resetUrl) {
+        deliver(user.getEmail(), "Restablece tu contraseña", null, null, h -> new EmailTemplate(h.getPrimaryColor())
+                .preheader("El enlace vence en 30 minutos")
+                .hero("&#128274;", Tone.BRAND, "Seguridad", "Restablece tu contraseña",
+                        "Hola " + esc(user.getFirstName()) + ", recibimos una solicitud para cambiar tu contraseña. El enlace vence en 30 minutos.")
+                .button("Crear nueva contraseña", resetUrl)
+                .notice(Tone.NEUTRAL, null, "Si no lo pediste tú, ignora este correo: tu contraseña actual sigue funcionando.")
+                .build(h.getName(), logoUrl(h), contact(h), "Recibes este correo porque se solicitó restablecer tu contraseña."));
+    }
+
+    // ── Personal ────────────────────────────────────────────────
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendNewAppointmentNoticeToDoctor(Appointment a, byte[] receiptPdf) {
+        staffNotice(a, a.getDoctor().getUser().getEmail(), Audience.DOCTOR, "Nueva cita agendada", "&#43;", Tone.SUCCESS,
+                "Tienes una nueva cita con <strong>" + esc(patientName(a)) + "</strong>.", receiptPdf, null, null);
+    }
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendNewAppointmentNoticeToReceptionists(Appointment a, byte[] receiptPdf) {
+        for (User u : userRepository.findByRole_NameAndIsActiveTrue(RoleName.RECEPTIONIST)) {
+            staffNotice(a, u.getEmail(), Audience.RECEPTION, "Nueva cita agendada", "&#43;", Tone.SUCCESS,
+                    "Se agendó una cita para el Dr(a). " + esc(doctorName(a)) + ".", receiptPdf, null, null);
         }
+    }
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendNewAppointmentNoticeToAdmins(Appointment a, byte[] receiptPdf) {
+        for (User u : userRepository.findByRole_NameAndIsActiveTrue(RoleName.ADMIN)) {
+            staffNotice(a, u.getEmail(), Audience.ADMIN, "Nueva cita agendada", "&#43;", Tone.SUCCESS,
+                    "Se agendó una cita para el Dr(a). " + esc(doctorName(a)) + ".", receiptPdf, null, null);
+        }
+    }
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendCancellationNoticeToDoctor(Appointment a, byte[] receiptPdf) {
+        staffNotice(a, a.getDoctor().getUser().getEmail(), Audience.DOCTOR, "Cita cancelada", "&#10005;", Tone.DANGER,
+                "Se canceló tu cita con <strong>" + esc(patientName(a)) + "</strong>. El horario quedó libre.", receiptPdf, null, null);
+    }
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendCancellationNoticeToReceptionists(Appointment a, byte[] receiptPdf) {
+        for (User u : userRepository.findByRole_NameAndIsActiveTrue(RoleName.RECEPTIONIST)) {
+            staffNotice(a, u.getEmail(), Audience.RECEPTION, "Cita cancelada", "&#10005;", Tone.DANGER,
+                    "Se canceló la cita del Dr(a). " + esc(doctorName(a)) + ".", receiptPdf, null, null);
+        }
+    }
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendCancellationNoticeToAdmins(Appointment a, byte[] receiptPdf) {
+        for (User u : userRepository.findByRole_NameAndIsActiveTrue(RoleName.ADMIN)) {
+            staffNotice(a, u.getEmail(), Audience.ADMIN, "Cita cancelada", "&#10005;", Tone.DANGER,
+                    "Se canceló la cita del Dr(a). " + esc(doctorName(a)) + ".", receiptPdf, null, null);
+        }
+    }
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendRescheduleNoticeToDoctor(Appointment a, LocalDate oldDate, LocalTime oldStartTime, byte[] receiptPdf) {
+        staffNotice(a, a.getDoctor().getUser().getEmail(), Audience.DOCTOR, "Cita reprogramada", "&#8635;", Tone.INFO,
+                "La cita con <strong>" + esc(patientName(a)) + "</strong> cambió de horario.", receiptPdf, oldDate, oldStartTime);
+    }
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendRescheduleNoticeToReceptionists(Appointment a, LocalDate oldDate, LocalTime oldStartTime, byte[] receiptPdf) {
+        for (User u : userRepository.findByRole_NameAndIsActiveTrue(RoleName.RECEPTIONIST)) {
+            staffNotice(a, u.getEmail(), Audience.RECEPTION, "Cita reprogramada", "&#8635;", Tone.INFO,
+                    "Se reprogramó la cita del Dr(a). " + esc(doctorName(a)) + ".", receiptPdf, oldDate, oldStartTime);
+        }
+    }
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendRescheduleNoticeToAdmins(Appointment a, LocalDate oldDate, LocalTime oldStartTime, byte[] receiptPdf) {
+        for (User u : userRepository.findByRole_NameAndIsActiveTrue(RoleName.ADMIN)) {
+            staffNotice(a, u.getEmail(), Audience.ADMIN, "Cita reprogramada", "&#8635;", Tone.INFO,
+                    "Se reprogramó la cita del Dr(a). " + esc(doctorName(a)) + ".", receiptPdf, oldDate, oldStartTime);
+        }
+    }
+
+    /** Aviso operativo al personal: lo que necesita para preparar la consulta y un botón al panel. */
+    private void staffNotice(Appointment a, String to, Audience audience, String title, String icon, Tone tone,
+                             String intro, byte[] receiptPdf, LocalDate oldDate, LocalTime oldTime) {
+        if (blank(to)) return;
+        deliver(to, title + " · " + a.getAppointmentDate().format(DATE_FMT) + " " + a.getStartTime().format(TIME_FMT), a.getId(), receiptPdf, h -> {
+            EmailTemplate t = new EmailTemplate(h.getPrimaryColor())
+                    .preheader(patientName(a) + " · " + a.getAppointmentDate().format(LONG_DATE) + " " + a.getStartTime().format(TIME_FMT))
+                    .hero(icon, tone, "Aviso del sistema", title, intro);
+            if (oldDate != null) t.change(oldDate, oldTime, a);
+            t.appointmentCard(a, tone == Tone.DANGER);
+            List<String[]> rows = new ArrayList<>();
+            rows.add(new String[]{"Paciente", esc(patientName(a))});
+            rows.add(new String[]{"Teléfono", esc(a.getPatient().getPhone())});
+            rows.add(new String[]{"Folio", "#" + String.format("%06d", a.getId())});
+            if (audience == Audience.DOCTOR) {
+                rows.add(new String[]{"Alergias", esc(blank(a.getAllergiesSnapshot()) ? "No especificadas" : a.getAllergiesSnapshot())});
+                rows.add(new String[]{"Motivo", esc(a.getReasonForVisit())});
+            }
+            if (tone == Tone.DANGER) rows.add(new String[]{"Motivo de cancelación", esc(a.getCancelReason())});
+            if (Boolean.TRUE.equals(a.getOverbooked())) rows.add(new String[]{"Tipo", "Sobrecupo"});
+            return t.rows(rows)
+                    .button("Abrir en el panel", tenantLinks.frontendBase() + switch (audience) {
+                        case DOCTOR -> "/doctor/citas";
+                        case RECEPTION -> "/recepcion/citas";
+                        case ADMIN -> "/admin/citas";
+                    })
+                    .build(h.getName(), logoUrl(h), contact(h), "Recibes este aviso por ser parte del personal de " + h.getName() + ".");
+        });
+    }
+
+    // ── Genérico (ARCO) ─────────────────────────────────────────
+
+    @Override
+    @Async("notificationExecutor")
+    public void sendHtml(String to, String subject, String bodyHtml) {
+        deliver(to, subject, null, null, h -> new EmailTemplate(h.getPrimaryColor())
+                .preheader(subject)
+                .hero("&#128737;", Tone.BRAND, "Datos personales", subject, "")
+                .paragraph(bodyHtml)
+                .build(h.getName(), logoUrl(h), contact(h), "Recibes este correo por una solicitud de derechos ARCO."));
+    }
+
+    /** Escapa texto capturado por usuarios antes de insertarlo en un correo HTML. */
+    public static String escapeHtml(String value) {
+        return esc(value);
+    }
+
+    // ── Envío ───────────────────────────────────────────────────
+
+    private interface Body {
+        String render(HospitalConfig hospital) throws Exception;
+    }
+
+    private void deliver(String to, String subject, Long appointmentId, byte[] receiptPdf, Body body) {
+        deliverWithAttachment(to, subject, appointmentId != null ? "comprobante-cita-" + appointmentId + ".pdf" : null,
+                appointmentId != null ? receiptPdf : null, body);
+    }
+
+    private void deliverWithAttachment(String to, String subject, String filename, byte[] attachment, Body body) {
+        if (blank(to)) return;
         EmailConfig mailConfig = emailConfigService.getEntity();
         if (!Boolean.TRUE.equals(mailConfig.getEnabled())) {
-            log.info("Envío de correo deshabilitado; se omite el envío de la receta {}", prescription.getId());
+            log.info("Envío de correo deshabilitado; se omite '{}' a {}", subject, to);
             return;
         }
         try {
             HospitalConfig hospital = hospitalConfigService.getEntity();
-            String subject = "Tu receta médica — " + hospital.getName();
-            String html = """
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;">
-                      <h2 style="color:%s;">%s</h2>
-                      <p>Hola %s, adjunto encontrarás la receta médica de tu consulta con el Dr(a). %s %s
-                      del %s.</p>
-                    </div>
-                    """.formatted(
-                    color(hospital), subject, appointment.getPatient().getFirstName(),
-                    appointment.getDoctor().getUser().getFirstName(), appointment.getDoctor().getUser().getLastName(),
-                    appointment.getAppointmentDate().format(DATE_FMT));
-            send(mailConfig, to, subject, html, "receta-" + prescription.getId() + ".pdf", prescriptionPdf);
-            log.info("Receta {} enviada por correo a {}", prescription.getId(), to);
+            String html = body.render(hospital);
+            send(mailConfig, to, subject + " — " + hospital.getName(), html, filename, attachment);
+            log.info("Correo '{}' enviado a {}", subject, to);
         } catch (Exception e) {
-            log.error("No se pudo enviar la receta {} a {}", prescription.getId(), to, e);
+            log.error("No se pudo enviar '{}' a {}", subject, to, e);
         }
     }
 
-    private void sendStaffNotice(Appointment appointment, String to, String subjectPrefix, String introLine, byte[] receiptPdf) {
-        if (to == null || to.isBlank()) {
-            return;
-        }
-        EmailConfig mailConfig = emailConfigService.getEntity();
-        if (!Boolean.TRUE.equals(mailConfig.getEnabled())) {
-            log.info("Envío de correo deshabilitado; se omite aviso '{}' de la cita {}", subjectPrefix, appointment.getId());
-            return;
-        }
-        try {
-            HospitalConfig hospital = hospitalConfigService.getEntity();
-            String subject = subjectPrefix + " — " + hospital.getName();
-            String html = """
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;">
-                      <h2 style="color:%s;">%s</h2>
-                      <p>%s</p>
-                      <ul>
-                        <li><strong>Paciente:</strong> %s %s</li>
-                        <li><strong>Fecha:</strong> %s</li>
-                        <li><strong>Hora:</strong> %s</li>
-                        <li><strong>Sede:</strong> %s</li>
-                      </ul>
-                    </div>
-                    """.formatted(
-                    color(hospital), subject, introLine,
-                    appointment.getPatient().getFirstName(), appointment.getPatient().getLastName(),
-                    appointment.getAppointmentDate().format(DATE_FMT), appointment.getStartTime().format(TIME_FMT),
-                    appointment.getBranch().getName());
-            send(mailConfig, to, subject, html, appointment.getId(), receiptPdf);
-        } catch (Exception e) {
-            log.error("No se pudo enviar aviso '{}' de la cita {} a {}", subjectPrefix, appointment.getId(), to, e);
-        }
-    }
-
-    /** `appointmentId`/`receiptPdf` son opcionales (null en los correos que no son de una
-     * cita, ej. contraseña temporal): cuando ambos vienen, el comprobante en PDF se adjunta
-     * al correo en vez de solo describir la cita en el cuerpo. */
-    private void send(EmailConfig mailConfig, String to, String subject, String html,
-                       Long appointmentId, byte[] receiptPdf) throws Exception {
-        String attachmentFilename = appointmentId != null ? "comprobante-cita-" + appointmentId + ".pdf" : null;
-        send(mailConfig, to, subject, html, attachmentFilename, receiptPdf);
-    }
-
-    /** Igual que arriba, pero con el nombre del adjunto explícito -- para correos que no
-     * adjuntan un comprobante de cita (ej. la receta médica). */
-    private void send(EmailConfig mailConfig, String to, String subject, String html,
-                       String attachmentFilename, byte[] attachmentPdf) throws Exception {
+    private void send(EmailConfig mailConfig, String to, String subject, String html, String attachmentFilename,
+                      byte[] attachmentPdf) throws Exception {
         JavaMailSenderImpl sender = new JavaMailSenderImpl();
         sender.setHost(mailConfig.getSmtpHost());
         sender.setPort(mailConfig.getSmtpPort());
@@ -479,24 +381,78 @@ public class EmailServiceImpl implements EmailService {
         props.put("mail.smtp.starttls.enable", "true");
 
         MimeMessage message = sender.createMimeMessage();
-        MimeMessageHelper helper = new MimeMessageHelper(message, attachmentPdf != null, "UTF-8");
+        MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
         helper.setTo(to);
-        String from = mailConfig.getFromAddress() != null && !mailConfig.getFromAddress().isBlank()
-                ? mailConfig.getFromAddress() : mailConfig.getSmtpUsername();
+        String from = !blank(mailConfig.getFromAddress()) ? mailConfig.getFromAddress() : mailConfig.getSmtpUsername();
         helper.setFrom(from);
         helper.setSubject(subject);
-        helper.setText(html, true);
-        if (attachmentPdf != null) {
-            helper.addAttachment(attachmentFilename, new ByteArrayResource(attachmentPdf));
+        helper.setText(EmailTemplate.toPlainText(html), html);
+        if (attachmentPdf != null && attachmentFilename != null) {
+            helper.addAttachment(attachmentFilename, new ByteArrayResource(attachmentPdf), "application/pdf");
         }
         sender.send(message);
     }
 
-    private String color(HospitalConfig hospital) {
-        return hospital.getPrimaryColor() != null ? hospital.getPrimaryColor() : "#0F766E";
+    // ── Datos ───────────────────────────────────────────────────
+
+    private List<String[]> appointmentRows(Appointment a) {
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[]{"Folio", "#" + String.format("%06d", a.getId())});
+        rows.add(new String[]{"Paciente", esc(patientName(a))});
+        BigDecimal price = a.getPrice();
+        rows.add(new String[]{"Consulta", price != null && price.signum() > 0
+                ? NumberFormat.getCurrencyInstance(MX).format(price) + " MXN" : "Por confirmar en recepción"});
+        String ps = a.getPaymentStatus() != null ? a.getPaymentStatus().name() : "UNPAID";
+        rows.add(new String[]{"Pago", switch (ps) {
+            case "PAID" -> "<span style=\"color:#047857;\">Pagada</span>";
+            case "PENDING" -> "<span style=\"color:#1d4ed8;\">Transferencia pendiente</span>";
+            case "REFUNDED" -> "Reembolsada";
+            default -> "En recepción, al terminar tu consulta";
+        }});
+        return rows;
     }
 
-    private String nullSafe(String value) {
-        return value != null ? value : "";
+    private List<String> recommendations(Appointment a) {
+        String raw = !blank(a.getDoctor().getSpecialty().getRecommendations())
+                ? a.getDoctor().getSpecialty().getRecommendations() : DEFAULT_RECOMMENDATIONS;
+        List<String> items = new ArrayList<>();
+        for (String part : raw.split("[•\\n]")) {
+            if (!part.isBlank()) items.add(part.trim());
+        }
+        return items;
+    }
+
+    private String manageUrl(Appointment a) {
+        return tenantLinks.frontendBase() + "/cancelar-cita/" + a.getCancelToken();
+    }
+
+    /** El logo solo se muestra si hay una URL pública del backend para que el cliente de correo lo descargue. */
+    private String logoUrl(HospitalConfig h) {
+        String logo = h.getLogoUrl();
+        if (blank(logo)) return null;
+        if (logo.startsWith("http://") || logo.startsWith("https://")) return logo;
+        if (blank(publicUrl)) return null;
+        return publicUrl.replaceAll("/+$", "") + "/uploads/" + logo.replaceAll("^/+", "");
+    }
+
+    private String contact(HospitalConfig h) {
+        List<String> parts = new ArrayList<>();
+        if (!blank(h.getContactPhone())) parts.add("&#9742; " + esc(h.getContactPhone()));
+        if (!blank(h.getContactEmail())) parts.add("&#9993; " + esc(h.getContactEmail()));
+        String line = String.join("&nbsp;&nbsp;·&nbsp;&nbsp;", parts);
+        String address = AppointmentReceiptServiceImpl.hospitalAddress(h);
+        return address.isEmpty() ? line : line + "<br>&#128205; " + esc(address);
+    }
+
+    private static String patientName(Appointment a) {
+        return a.getPatient().getFirstName() + " " + a.getPatient().getLastName();
+    }
+
+    private static String doctorName(Appointment a) {
+        return a.getDoctor().getUser().getFirstName() + " " + a.getDoctor().getUser().getLastName();
+    }
+
+    private static boolean blank(String s) {
+        return s == null || s.isBlank();
     }
 }

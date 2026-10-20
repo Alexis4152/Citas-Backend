@@ -24,8 +24,8 @@ import java.time.LocalTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Cubre la regla central de negocio: cancelación >=24h vs <24h de anticipación, y que
- * release-slot solo funcione cuando la cita quedó marcada como elegible al cancelarse. */
+/** Cubre la regla central de cancelación: al cancelar una cita cuyo horario todavía no llega,
+ * el espacio vuelve a estar disponible de inmediato (app.appointments.auto-release-on-cancel). */
 class CancellationTest extends AbstractIntegrationTest {
 
     @Autowired
@@ -36,7 +36,7 @@ class CancellationTest extends AbstractIntegrationTest {
         req.setFirstName("Invitado");
         // Único por llamada: el agendado de invitado reutiliza al paciente con el mismo nombre+teléfono
         // y limita las citas simultáneas por paciente/teléfono, así que los tests no deben compartirlo.
-        req.setLastName("Cancelacion-" + java.util.UUID.randomUUID().toString().substring(0, 8));
+        req.setLastName("Cancelacion-" + randomLetters(8));
         req.setPhone("55" + (10000000 + new java.util.Random().nextInt(89999999)));
         req.setDoctorId(doctor.getId());
         req.setBranchId(branch.getId());
@@ -67,7 +67,7 @@ class CancellationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void cancellingAtLeast24hInAdvanceMakesSlotEligibleForManualRelease() {
+    void cancellingAFutureAppointmentFreesTheSlotImmediately() {
         Branch branch = createBranch("Sede-Cancel24");
         Specialty specialty = createSpecialty("Especialidad-Cancel24");
         Doctor doctor = createDoctorWithFullWeekSchedule(branch, specialty);
@@ -78,30 +78,24 @@ class CancellationTest extends AbstractIntegrationTest {
 
         assertThat(cancelled.getStatus()).isEqualTo("CANCELLED");
         assertThat(cancelled.getReleaseEligible()).isTrue();
-        assertThat(cancelled.getSlotReleased()).isFalse();
-        assertThat(cancelled.getCanRelease()).isTrue();
+        // Regla nueva: el espacio queda libre en cuanto se cancela, sin esperar a recepción.
+        assertThat(cancelled.getSlotReleased()).isTrue();
+        assertThat(cancelled.getCanRelease()).isFalse();
 
+        // Ya liberado: liberarlo a mano se rechaza.
         String doctorToken = loginAndGetToken(doctor.getUser().getEmail(), "Doctor123!");
-        ResponseEntity<ApiResponse<AppointmentResponse>> releaseResponse = restTemplate.exchange(
-                baseUrl("/api/doctor/appointments/" + booked.getId() + "/release-slot"), HttpMethod.PATCH,
-                new HttpEntity<>(authHeaders(doctorToken)),
-                new ParameterizedTypeReference<>() {});
-        assertThat(releaseResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(releaseResponse.getBody().getData().getSlotReleased()).isTrue();
-
-        // Ya liberado: un segundo intento debe rechazarse.
-        ResponseEntity<String> secondRelease = restTemplate.exchange(
+        ResponseEntity<String> manualRelease = restTemplate.exchange(
                 baseUrl("/api/doctor/appointments/" + booked.getId() + "/release-slot"), HttpMethod.PATCH,
                 new HttpEntity<>(authHeaders(doctorToken)), String.class);
-        assertThat(secondRelease.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(manualRelease.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
 
-        // El slot vuelve a estar disponible para agendarse.
+        // Y otra persona lo puede agendar de inmediato.
         AppointmentResponse rebooked = book(doctor, branch, date, LocalTime.of(8, 0));
         assertThat(rebooked.getStatus()).isEqualTo("SCHEDULED");
     }
 
     @Test
-    void cancellingLessThan24hInAdvanceIsNotEligibleForManualRelease() {
+    void cancellingLessThan24hInAdvanceAlsoFreesTheSlot() {
         Branch branch = createBranch("Sede-CancelLate");
         Specialty specialty = createSpecialty("Especialidad-CancelLate");
         Doctor doctor = createDoctorWithFullWeekSchedule(branch, specialty);
@@ -120,13 +114,9 @@ class CancellationTest extends AbstractIntegrationTest {
         AppointmentResponse cancelled = cancel(booked.getCancelToken());
 
         assertThat(cancelled.getStatus()).isEqualTo("CANCELLED");
+        // Cancelación tardía: queda registrada como tal (releaseEligible=false), pero el horario
+        // todavía no llega, así que se libera para que alguien más lo aproveche.
         assertThat(cancelled.getReleaseEligible()).isFalse();
-        assertThat(cancelled.getCanRelease()).isFalse();
-
-        String doctorToken = loginAndGetToken(doctor.getUser().getEmail(), "Doctor123!");
-        ResponseEntity<String> releaseResponse = restTemplate.exchange(
-                baseUrl("/api/doctor/appointments/" + booked.getId() + "/release-slot"), HttpMethod.PATCH,
-                new HttpEntity<>(authHeaders(doctorToken)), String.class);
-        assertThat(releaseResponse.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(cancelled.getSlotReleased()).isTrue();
     }
 }

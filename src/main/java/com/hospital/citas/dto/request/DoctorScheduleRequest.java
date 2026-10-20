@@ -28,4 +28,17 @@ public class DoctorScheduleRequest {
     @Min(value = 5, message = "La duración del espacio debe ser de al menos 5 minutos")
     @Max(value = 240, message = "La duración del espacio no puede superar 240 minutos")
     private Integer slotMinutes;
+
+    @jakarta.validation.constraints.AssertTrue(message = "La hora de fin del horario debe ser posterior a la de inicio")
+    public boolean isTimeRangeValid() {
+        return startTime == null || endTime == null || endTime.isAfter(startTime);
+    }
+
+    @jakarta.validation.constraints.AssertTrue(message = "El horario debe durar al menos lo que dura un espacio de cita")
+    public boolean isLongEnoughForOneSlot() {
+        if (startTime == null || endTime == null || slotMinutes == null || !endTime.isAfter(startTime)) {
+            return true;
+        }
+        return java.time.Duration.between(startTime, endTime).toMinutes() >= slotMinutes;
+    }
 }

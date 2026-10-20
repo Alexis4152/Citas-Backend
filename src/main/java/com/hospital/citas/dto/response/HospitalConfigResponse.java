@@ -16,4 +16,16 @@ public class HospitalConfigResponse {
     private String description;
     private String contactPhone;
     private String contactEmail;
+    private String legalName;
+    private String rfc;
+    private String addressLine;
+    private String neighborhood;
+    private String city;
+    private String state;
+    private String postalCode;
+    private String website;
+    private String whatsapp;
+    private String openingHours;
+    private Boolean autoNoShowEnabled;
+    private Integer noShowGraceMinutes;
 }

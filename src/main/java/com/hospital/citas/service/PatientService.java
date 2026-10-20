@@ -37,6 +37,9 @@ public interface PatientService {
     void applyMedicalInfo(Patient patient, MedicalInfoRequest request, User modifiedBy);
 
     /** Recepción/doctor/admin editando la info médica de cualquier paciente por id. */
+    /** Datos personales y de contacto (dirección, CP, fecha de nacimiento, contacto de emergencia...). */
+    PatientResponse updateProfile(Long patientId, com.hospital.citas.dto.request.PatientProfileRequest request);
+
     PatientResponse updateMedicalInfo(Long patientId, MedicalInfoRequest request);
 
     /** El propio paciente autenticado editando la suya. */

@@ -33,4 +33,16 @@ public class PatientResponse {
      * lo reportó un invitado sin cuenta identificada (ver Patient#medicalInfoUpdatedBy). */
     private String medicalInfoUpdatedByName;
     private LocalDateTime medicalInfoUpdatedAt;
+    private java.time.LocalDate birthDate;
+    /** Edad calculada a hoy (null sin fecha de nacimiento). */
+    private Integer age;
+    private String sex;
+    private String curp;
+    private String addressLine;
+    private String neighborhood;
+    private String city;
+    private String state;
+    private String postalCode;
+    private String emergencyContactName;
+    private String emergencyContactPhone;
 }

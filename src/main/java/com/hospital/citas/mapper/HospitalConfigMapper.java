@@ -27,6 +27,18 @@ public class HospitalConfigMapper {
                 .description(config.getDescription())
                 .contactPhone(config.getContactPhone())
                 .contactEmail(config.getContactEmail())
+                .legalName(config.getLegalName())
+                .rfc(config.getRfc())
+                .addressLine(config.getAddressLine())
+                .neighborhood(config.getNeighborhood())
+                .city(config.getCity())
+                .state(config.getState())
+                .postalCode(config.getPostalCode())
+                .website(config.getWebsite())
+                .whatsapp(config.getWhatsapp())
+                .openingHours(config.getOpeningHours())
+                .autoNoShowEnabled(config.getAutoNoShowEnabled())
+                .noShowGraceMinutes(config.getNoShowGraceMinutes())
                 .build();
     }
 }

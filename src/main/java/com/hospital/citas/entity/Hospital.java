@@ -38,7 +38,9 @@ public class Hospital {
     @Column(name = "openpay_merchant_id", length = 100)
     private String openpayMerchantId;
 
-    @Column(name = "openpay_private_key", length = 100)
+    /** Cifrada en BD (ver EncryptedStringConverter). */
+    @Convert(converter = com.hospital.citas.security.EncryptedStringConverter.class)
+    @Column(name = "openpay_private_key", length = 512)
     private String openpayPrivateKey;
 
     @Column(name = "openpay_public_key", length = 100)

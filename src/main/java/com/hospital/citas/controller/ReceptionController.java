@@ -110,6 +110,12 @@ public class ReceptionController {
         return ApiResponse.ok(appointmentService.lookupForCharge(q));
     }
 
+    /** "Confirma si llegó": citas cuya hora ya pasó sin llegada registrada. */
+    @GetMapping("/charge/to-confirm")
+    public ApiResponse<List<AppointmentResponse>> chargeToConfirm() {
+        return ApiResponse.ok(appointmentService.listToConfirmArrival());
+    }
+
     @GetMapping("/patients")
     public ApiResponse<PageResponse<PatientResponse>> searchPatients(
             @RequestParam(required = false) String q,
@@ -147,6 +153,12 @@ public class ReceptionController {
     @GetMapping("/patients/{id}")
     public ApiResponse<PatientResponse> getPatient(@PathVariable Long id) {
         return ApiResponse.ok(patientService.getById(id));
+    }
+
+    @PutMapping("/patients/{id}/profile")
+    public ApiResponse<PatientResponse> updatePatientProfile(@PathVariable Long id,
+                                                           @Valid @RequestBody com.hospital.citas.dto.request.PatientProfileRequest request) {
+        return ApiResponse.ok(patientService.updateProfile(id, request), "Datos del paciente actualizados");
     }
 
     @PutMapping("/patients/{id}/medical-info")

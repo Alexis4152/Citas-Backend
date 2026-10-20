@@ -20,6 +20,9 @@ public interface CashCutService {
     /** Detalle completo: dueño del corte o ADMIN. */
     CashCutResponse get(Long cutId);
 
+    /** El corte como reporte (resumen + cada cobro) para bajarlo en CSV/Excel/PDF. Mismo acceso que {@link #get}. */
+    com.hospital.citas.report.ReportTable report(Long cutId);
+
     /** Historial: cada quien ve los suyos; el ADMIN, los de todos. */
     PageResponse<CashCutResponse> list(Pageable pageable);
 }

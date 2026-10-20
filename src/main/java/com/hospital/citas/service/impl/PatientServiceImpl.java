@@ -75,6 +75,9 @@ public class PatientServiceImpl implements PatientService {
         patient.setLastName(request.getLastName());
         patient.setPhone(request.getPhone());
         patient.setEmail(request.getEmail());
+        applyProfile(patient, request.getBirthDate(), request.getSex(), request.getCurp(), request.getAddressLine(),
+                request.getNeighborhood(), request.getCity(), request.getState(), request.getPostalCode(),
+                request.getEmergencyContactName(), request.getEmergencyContactPhone());
         patient.setCreatedBy(SecurityUtils.getCurrentUserOrNull());
         // Sin guardar todavía (setMedicalInfoFields no persiste) -- el único save() de este
         // método, más abajo, ya deja todo en una sola inserción.
@@ -191,6 +194,44 @@ public class PatientServiceImpl implements PatientService {
     public void applyMedicalInfo(Patient patient, MedicalInfoRequest request, User modifiedBy) {
         setMedicalInfoFields(patient, request, modifiedBy);
         patientRepository.save(patient);
+    }
+
+    @Override
+    @Transactional
+    public PatientResponse updateProfile(Long patientId, com.hospital.citas.dto.request.PatientProfileRequest request) {
+        requireAccessible(patientId);
+        Patient patient = getEntityById(patientId);
+        if (!Boolean.TRUE.equals(patient.getIsActive())) {
+            throw new BusinessException("Ese paciente fue fusionado con otro registro; edita el registro vigente");
+        }
+        patient.setFirstName(request.getFirstName().trim());
+        patient.setLastName(request.getLastName().trim());
+        patient.setPhone(request.getPhone());
+        patient.setEmail(blank(request.getEmail()) ? null : request.getEmail().trim());
+        applyProfile(patient, request.getBirthDate(), request.getSex(), request.getCurp(), request.getAddressLine(),
+                request.getNeighborhood(), request.getCity(), request.getState(), request.getPostalCode(),
+                request.getEmergencyContactName(), request.getEmergencyContactPhone());
+        patient.setUpdatedBy(SecurityUtils.getCurrentUserOrNull());
+        return patientMapper.toResponse(patientRepository.save(patient));
+    }
+
+    private void applyProfile(Patient p, java.time.LocalDate birthDate, String sex, String curp, String addressLine,
+                              String neighborhood, String city, String state, String postalCode,
+                              String emergencyName, String emergencyPhone) {
+        p.setBirthDate(birthDate);
+        p.setSex(blank(sex) ? null : sex.trim().toUpperCase(java.util.Locale.ROOT));
+        p.setCurp(blank(curp) ? null : curp.trim().toUpperCase(java.util.Locale.ROOT));
+        p.setAddressLine(blank(addressLine) ? null : addressLine.trim());
+        p.setNeighborhood(blank(neighborhood) ? null : neighborhood.trim());
+        p.setCity(blank(city) ? null : city.trim());
+        p.setState(blank(state) ? null : state.trim());
+        p.setPostalCode(blank(postalCode) ? null : postalCode.trim());
+        p.setEmergencyContactName(blank(emergencyName) ? null : emergencyName.trim());
+        p.setEmergencyContactPhone(blank(emergencyPhone) ? null : emergencyPhone.trim());
+    }
+
+    private static boolean blank(String s) {
+        return s == null || s.isBlank();
     }
 
     @Override

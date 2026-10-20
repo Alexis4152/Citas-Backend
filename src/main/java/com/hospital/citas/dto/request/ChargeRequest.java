@@ -35,4 +35,10 @@ public class ChargeRequest {
 
     @Size(max = 100)
     private String deviceSessionId;
+
+    @jakarta.validation.constraints.AssertTrue(message = "El efectivo recibido no puede ser menor al monto a cobrar")
+    public boolean isCashEnough() {
+        return method != com.hospital.citas.enums.PaymentMethod.CASH || amount == null || cashReceived == null
+                || cashReceived.compareTo(amount) >= 0;
+    }
 }

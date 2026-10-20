@@ -22,14 +22,16 @@ public class HospitalCreateRequest {
 
     @NotBlank(message = "El nombre del administrador es obligatorio")
     @Size(max = 100)
+    @jakarta.validation.constraints.Pattern(regexp = com.hospital.citas.util.ValidationPatterns.NAME_REGEXP, message = com.hospital.citas.util.ValidationPatterns.NAME_MESSAGE)
     private String adminFirstName;
 
     @NotBlank(message = "El apellido del administrador es obligatorio")
     @Size(max = 100)
+    @jakarta.validation.constraints.Pattern(regexp = com.hospital.citas.util.ValidationPatterns.NAME_REGEXP, message = com.hospital.citas.util.ValidationPatterns.NAME_MESSAGE)
     private String adminLastName;
 
     @NotBlank(message = "El correo del administrador es obligatorio")
-    @Email(message = "Correo inválido")
+    @Email(regexp = com.hospital.citas.util.ValidationPatterns.EMAIL_REGEXP, message = "Correo inválido")
     @Size(max = 150)
     private String adminEmail;
 }

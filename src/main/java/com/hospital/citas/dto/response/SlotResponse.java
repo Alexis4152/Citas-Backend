@@ -15,4 +15,9 @@ public class SlotResponse {
     /** Solo en la vista de recepción/admin: el espacio está ocupado por otra cita pero aún se
      * puede empalmar como sobrecupo (no está bloqueado por la agenda del doctor ni terminó). */
     private boolean overbookable;
+    /** Otra persona está apartando este horario en este momento (ver SlotHold): no se ofrece,
+     * pero vuelve a estar libre si no lo confirma. */
+    private boolean held;
+    /** Este horario lo apartó la misma pestaña que consulta. */
+    private boolean heldByMe;
 }

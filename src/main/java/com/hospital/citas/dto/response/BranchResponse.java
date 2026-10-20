@@ -17,4 +17,7 @@ public class BranchResponse {
     private LocalTime openTime;
     private LocalTime closeTime;
     private Boolean isActive;
+    private String neighborhood;
+    private String state;
+    private String postalCode;
 }

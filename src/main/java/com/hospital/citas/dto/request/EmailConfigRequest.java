@@ -12,6 +12,7 @@ public class EmailConfigRequest {
     private boolean enabled;
 
     @NotBlank(message = "El host SMTP es obligatorio")
+    @jakarta.validation.constraints.Size(max = 255, message = "El host SMTP es demasiado largo")
     private String smtpHost;
 
     @NotNull(message = "El puerto SMTP es obligatorio")
@@ -20,8 +21,19 @@ public class EmailConfigRequest {
     private String smtpUsername;
 
     /** Campo write-only: en blanco significa "no cambiar la contraseña ya guardada". */
+    @jakarta.validation.constraints.Size(max = 200, message = "La contraseña SMTP es demasiado larga")
     private String smtpPassword;
 
-    @Email(message = "El correo remitente no es válido")
+    @Email(regexp = com.hospital.citas.util.ValidationPatterns.EMAIL_REGEXP, message = "El correo remitente no es válido")
     private String fromAddress;
+
+    @jakarta.validation.constraints.AssertTrue(message = "Para activar el envío de correos captura el usuario SMTP o el correo remitente")
+    public boolean isSenderPresentWhenEnabled() {
+        return !enabled || (smtpUsername != null && !smtpUsername.isBlank()) || (fromAddress != null && !fromAddress.isBlank());
+    }
+
+    @jakarta.validation.constraints.AssertTrue(message = "El puerto SMTP debe estar entre 1 y 65535")
+    public boolean isPortValid() {
+        return smtpPort == null || (smtpPort >= 1 && smtpPort <= 65535);
+    }
 }

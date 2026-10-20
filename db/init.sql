@@ -521,3 +521,169 @@ FROM roles r WHERE r.name = 'SUPER_ADMIN'
 AND NOT EXISTS (SELECT 1 FROM users WHERE hospital_id IS NULL AND email = 'ing.arturopineda.94@gmail.com');
 
 COMMIT;
+
+-- ============================================================
+-- 21 (idéntico a db/21_apartados_arco_seguridad.sql): apartado temporal de horarios,
+-- solicitudes ARCO y cifrado de credenciales.
+-- ============================================================
+BEGIN;
+
+-- ============ APARTADO TEMPORAL DE HORARIOS ============
+-- Mientras alguien llena sus datos para agendar, el horario queda apartado unos minutos y
+-- los demás lo ven como "alguien lo está apartando". Si no confirma a tiempo, el apartado
+-- vence solo y el horario vuelve a estar libre (ver SlotHoldService).
+CREATE TABLE IF NOT EXISTS slot_holds (
+    id           BIGSERIAL PRIMARY KEY,
+    hospital_id  BIGINT      NOT NULL REFERENCES hospitals(id),
+    doctor_id    BIGINT      NOT NULL REFERENCES doctors(id),
+    branch_id    BIGINT      NOT NULL REFERENCES branches(id),
+    hold_date    DATE        NOT NULL,
+    start_time   TIME        NOT NULL,
+    end_time     TIME        NOT NULL,
+    -- Identificador aleatorio de la pestaña del navegador que aparta (no es un dato personal).
+    holder_key   VARCHAR(64) NOT NULL,
+    -- Se devuelve solo a quien apartó: con él confirma la cita o suelta el horario.
+    token        UUID        NOT NULL UNIQUE,
+    client_ip    VARCHAR(64),
+    expires_at   TIMESTAMP   NOT NULL,
+    created_at   TIMESTAMP   NOT NULL DEFAULT NOW()
+);
+-- Un solo apartado por horario: si dos personas lo intentan al mismo tiempo, la segunda choca aquí.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_slot_holds_slot ON slot_holds (doctor_id, hold_date, start_time);
+CREATE INDEX IF NOT EXISTS idx_slot_holds_hospital ON slot_holds (hospital_id);
+CREATE INDEX IF NOT EXISTS idx_slot_holds_holder ON slot_holds (holder_key);
+CREATE INDEX IF NOT EXISTS idx_slot_holds_expires ON slot_holds (expires_at);
+
+-- ============ SOLICITUDES ARCO ============
+-- Derechos de Acceso, Rectificación, Cancelación y Oposición (LFPDPPP) sobre los datos
+-- personales que guarda cada hospital. Las atiende el ADMIN de ese hospital.
+CREATE TABLE IF NOT EXISTS arco_requests (
+    id                   BIGSERIAL PRIMARY KEY,
+    hospital_id          BIGINT       NOT NULL REFERENCES hospitals(id),
+    requester_name       VARCHAR(150) NOT NULL,
+    requester_email      VARCHAR(150) NOT NULL,
+    requester_phone      VARCHAR(30),
+    type                 VARCHAR(20)  NOT NULL CHECK (type IN ('ACCESS', 'RECTIFICATION', 'CANCELLATION', 'OPPOSITION')),
+    status               VARCHAR(15)  NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'COMPLETED', 'REJECTED')),
+    details              TEXT,
+    resolution_notes     TEXT,
+    requester_user_id    BIGINT       REFERENCES users(id),
+    patient_id           BIGINT       REFERENCES patients(id),
+    resolved_by_user_id  BIGINT       REFERENCES users(id),
+    created_at           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    -- La ley da 20 días hábiles para responder: se guarda la fecha límite al recibirla.
+    due_date             DATE         NOT NULL,
+    resolved_at          TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_arco_requests_hospital_status ON arco_requests (hospital_id, status);
+CREATE INDEX IF NOT EXISTS idx_arco_requests_requester ON arco_requests (requester_user_id);
+
+-- ============ CREDENCIALES CIFRADAS ============
+-- La llave privada de OpenPay y la contraseña SMTP ahora se guardan cifradas (AES-256-GCM):
+-- el texto cifrado es más largo que el original. Los valores ya guardados en claro se siguen
+-- leyendo y se cifran la próxima vez que el admin los guarde.
+ALTER TABLE hospitals ALTER COLUMN openpay_private_key TYPE VARCHAR(512);
+ALTER TABLE email_config ALTER COLUMN smtp_password TYPE VARCHAR(512);
+
+COMMIT;
+
+-- ============================================================
+-- 22 (idéntico a db/22_bitacora_y_rate_limit.sql): bitácora y rate limiting compartido.
+-- ============================================================
+BEGIN;
+
+-- ============ BITÁCORA (quién vio o cambió qué expediente) ============
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id           BIGSERIAL PRIMARY KEY,
+    hospital_id  BIGINT       NOT NULL REFERENCES hospitals(id),
+    user_id      BIGINT       REFERENCES users(id),
+    user_name    VARCHAR(150),
+    user_role    VARCHAR(30),
+    action       VARCHAR(40)  NOT NULL,
+    entity_type  VARCHAR(30),
+    entity_id    BIGINT,
+    path         VARCHAR(255),
+    client_ip    VARCHAR(64),
+    created_at   TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_hospital_created ON audit_logs (hospital_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs (hospital_id, entity_type, entity_id);
+
+-- ============ RATE LIMITING COMPARTIDO (APP_RATE_LIMIT_STORE=database) ============
+-- Solo se usa con varias instancias del backend; con una sola, los contadores van en memoria.
+CREATE TABLE IF NOT EXISTS rate_limit_hits (
+    bucket_key    VARCHAR(200) NOT NULL,
+    window_start  TIMESTAMP    NOT NULL,
+    hits          INTEGER      NOT NULL DEFAULT 0,
+    PRIMARY KEY (bucket_key, window_start)
+);
+
+COMMIT;
+
+-- ============================================================
+-- 23_datos_direccion (idéntico a db/23_datos_direccion.sql)
+-- ============================================================
+BEGIN;
+
+-- Hospital: datos fiscales y dirección (aparecen en comprobantes, recetas y correos).
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS legal_name    VARCHAR(200);
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS rfc           VARCHAR(13);
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS address_line  VARCHAR(200);
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS neighborhood  VARCHAR(120);
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS city          VARCHAR(100);
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS state         VARCHAR(80);
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS postal_code   VARCHAR(5);
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS website       VARCHAR(200);
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS whatsapp      VARCHAR(10);
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS opening_hours VARCHAR(300);
+
+-- Sedes: colonia, estado y código postal.
+ALTER TABLE branches ADD COLUMN IF NOT EXISTS neighborhood VARCHAR(120);
+ALTER TABLE branches ADD COLUMN IF NOT EXISTS state        VARCHAR(80);
+ALTER TABLE branches ADD COLUMN IF NOT EXISTS postal_code  VARCHAR(5);
+
+-- Pacientes: datos personales y de contacto.
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS birth_date              DATE;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS sex                     VARCHAR(1);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS curp                    VARCHAR(18);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS address_line            VARCHAR(200);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS neighborhood            VARCHAR(120);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS city                    VARCHAR(100);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS state                   VARCHAR(80);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS postal_code             VARCHAR(5);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS emergency_contact_name  VARCHAR(150);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS emergency_contact_phone VARCHAR(10);
+
+COMMIT;
+
+-- ============================================================
+-- 24_permisos (idéntico a db/24_permisos.sql)
+-- ============================================================
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+    hospital_id  BIGINT      NOT NULL REFERENCES hospitals(id),
+    role         VARCHAR(30) NOT NULL CHECK (role IN ('RECEPTIONIST', 'DOCTOR')),
+    permission   VARCHAR(60) NOT NULL,
+    granted      BOOLEAN     NOT NULL,
+    PRIMARY KEY (hospital_id, role, permission)
+);
+
+-- Excepciones por persona: dar (GRANT) o quitar (DENY) un permiso a alguien en particular.
+CREATE TABLE IF NOT EXISTS user_permission_overrides (
+    hospital_id  BIGINT      NOT NULL REFERENCES hospitals(id),
+    user_id      BIGINT      NOT NULL REFERENCES users(id),
+    permission   VARCHAR(60) NOT NULL,
+    effect       VARCHAR(5)  NOT NULL CHECK (effect IN ('GRANT', 'DENY')),
+    PRIMARY KEY (user_id, permission)
+);
+CREATE INDEX IF NOT EXISTS idx_user_permission_overrides_hospital ON user_permission_overrides (hospital_id);
+
+-- 25 · Citas cuya hora ya pasó sin que nadie confirmara si el paciente llegó.
+-- Antes se marcaban SIEMPRE como "no asistió" 15 minutos después de terminar. Ahora cada
+-- hospital decide: por defecto queda apagado y recepción las confirma en "Cobrar"
+-- ("Confirma si llegó": Llegó → Cobrar / No asistió).
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS auto_no_show_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE hospital_config ADD COLUMN IF NOT EXISTS no_show_grace_minutes INTEGER NOT NULL DEFAULT 30;
+
+COMMIT;

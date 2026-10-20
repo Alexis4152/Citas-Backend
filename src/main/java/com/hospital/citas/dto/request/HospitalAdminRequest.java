@@ -11,14 +11,16 @@ public class HospitalAdminRequest {
 
     @NotBlank(message = "El nombre es obligatorio")
     @Size(max = 100)
+    @jakarta.validation.constraints.Pattern(regexp = com.hospital.citas.util.ValidationPatterns.NAME_REGEXP, message = com.hospital.citas.util.ValidationPatterns.NAME_MESSAGE)
     private String firstName;
 
     @NotBlank(message = "El apellido es obligatorio")
     @Size(max = 100)
+    @jakarta.validation.constraints.Pattern(regexp = com.hospital.citas.util.ValidationPatterns.NAME_REGEXP, message = com.hospital.citas.util.ValidationPatterns.NAME_MESSAGE)
     private String lastName;
 
     @NotBlank(message = "El correo es obligatorio")
-    @Email(message = "Correo inválido")
+    @Email(regexp = com.hospital.citas.util.ValidationPatterns.EMAIL_REGEXP, message = "Correo inválido")
     @Size(max = 150)
     private String email;
 }

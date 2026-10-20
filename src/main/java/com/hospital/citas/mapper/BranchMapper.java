@@ -12,6 +12,9 @@ public class BranchMapper {
         branch.setName(req.getName());
         branch.setAddress(req.getAddress());
         branch.setCity(req.getCity());
+        branch.setNeighborhood(blankToNull(req.getNeighborhood()));
+        branch.setState(blankToNull(req.getState()));
+        branch.setPostalCode(blankToNull(req.getPostalCode()));
         branch.setPhone(req.getPhone());
         branch.setOpenTime(req.getOpenTime());
         branch.setCloseTime(req.getCloseTime());
@@ -23,10 +26,17 @@ public class BranchMapper {
                 .name(branch.getName())
                 .address(branch.getAddress())
                 .city(branch.getCity())
+                .neighborhood(branch.getNeighborhood())
+                .state(branch.getState())
+                .postalCode(branch.getPostalCode())
                 .phone(branch.getPhone())
                 .openTime(branch.getOpenTime())
                 .closeTime(branch.getCloseTime())
                 .isActive(branch.getIsActive())
                 .build();
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 }

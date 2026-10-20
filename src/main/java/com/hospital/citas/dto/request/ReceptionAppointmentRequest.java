@@ -20,11 +20,13 @@ public class ReceptionAppointmentRequest {
     private Long branchId;
 
     @NotNull(message = "La fecha es obligatoria")
+    @jakarta.validation.constraints.FutureOrPresent(message = "La fecha de la cita no puede ser pasada")
     private LocalDate appointmentDate;
 
     @NotNull(message = "La hora es obligatoria")
     private LocalTime startTime;
 
+    @jakarta.validation.constraints.Size(max = 1000, message = "El motivo no puede superar 1000 caracteres")
     private String reasonForVisit;
 
     /** Sobrecupo: si el horario ya está ocupado por otra cita, empalma esta como extra en vez

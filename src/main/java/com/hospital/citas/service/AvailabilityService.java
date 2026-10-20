@@ -19,6 +19,11 @@ public interface AvailabilityService {
      * {@code overbookable} los espacios ya ocupados que aún se pueden empalmar. */
     List<DayAvailabilityResponse> getAvailability(Long doctorId, LocalDate from, int days, boolean staffMode);
 
+    /** {@code holderKey}: la pestaña que consulta. Sus propios apartados se marcan
+     * {@code heldByMe} (siguen disponibles para ella); los de los demás, {@code held}. */
+    List<DayAvailabilityResponse> getAvailability(Long doctorId, LocalDate from, int days, boolean staffMode,
+                                                  String holderKey);
+
     /**
      * Valida que (branch, date, startTime) caiga dentro del horario semanal del doctor en esa
      * sede y no esté bloqueado por una excepción de agenda. Devuelve la hora de fin calculada.

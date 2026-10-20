@@ -45,6 +45,8 @@ class FunctionalGapsTest extends AbstractIntegrationTest {
     private AvailabilityService availabilityService;
     @Autowired
     private AppointmentServiceImpl appointmentService;
+    @Autowired
+    private com.hospital.citas.service.HospitalConfigService hospitalConfigService;
 
     // ── Helpers ──────────────────────────────────────────────────
 
@@ -70,7 +72,7 @@ class FunctionalGapsTest extends AbstractIntegrationTest {
     }
 
     private GuestAppointmentRequest anonymousGuest(Doctor doctor, Branch branch, LocalDate date, LocalTime time) {
-        return guest(doctor, branch, date, time, "Invitado", "Gap-" + UUID.randomUUID().toString().substring(0, 8), randomPhone());
+        return guest(doctor, branch, date, time, "Invitado", "Gap-" + randomLetters(8), randomPhone());
     }
 
     private ResponseEntity<ApiResponse<AppointmentResponse>> postGuest(GuestAppointmentRequest req) {
@@ -301,7 +303,58 @@ class FunctionalGapsTest extends AbstractIntegrationTest {
     // ── 5 · No-show con gracia, llegada, corrección, walk-in y sobrecupo ──
 
     @Test
+    void withAutoNoShowOffTheAppointmentWaitsForReceptionToConfirmIt() {
+        Branch branch = createBranch("Sede-Confirma");
+        Doctor doctor = createDoctorWithFullWeekSchedule(branch, createSpecialty("Esp-Confirma"));
+        Appointment missed = insertAppointment(doctor, branch, newPatient("Sin", "Confirmar", randomPhone()),
+                LocalDateTime.now().minusHours(3), 30, AppointmentStatus.SCHEDULED);
+        Appointment arrived = insertAppointment(doctor, branch, newPatient("Ya", "Llego", randomPhone()),
+                LocalDateTime.now().minusHours(2), 30, AppointmentStatus.SCHEDULED);
+        arrived.setArrivedAt(LocalDateTime.now().minusHours(2));
+        appointmentRepository.save(arrived);
+
+        // Apagado (el valor de fábrica): el sistema no la toca...
+        assertThat(hospitalConfigService.getEntity().getAutoNoShowEnabled()).isFalse();
+        appointmentService.autoMarkPastDueAsNoShow();
+        assertThat(appointmentRepository.findById(missed.getId()).orElseThrow().getStatus()).isEqualTo(AppointmentStatus.SCHEDULED);
+
+        // ...y aparece en "Confirma si llegó" (la que ya llegó, no).
+        String reception = receptionistToken();
+        ResponseEntity<String> list = call(HttpMethod.GET, "/api/reception/charge/to-confirm", null, reception);
+        assertThat(list.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(appointmentIds(list)).contains(missed.getId()).doesNotContain(arrived.getId());
+
+        // Recepción confirma que no vino y sale de la lista.
+        assertThat(call(HttpMethod.PATCH, "/api/reception/appointments/" + missed.getId() + "/no-show", null, reception).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+        assertThat(appointmentIds(call(HttpMethod.GET, "/api/reception/charge/to-confirm", null, reception)))
+                .doesNotContain(missed.getId());
+    }
+
+    private static java.util.List<Long> appointmentIds(ResponseEntity<String> response) {
+        try {
+            var ids = new java.util.ArrayList<Long>();
+            new com.fasterxml.jackson.databind.ObjectMapper().readTree(response.getBody()).get("data").forEach(n -> ids.add(n.get("id").asLong()));
+            return ids;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Test
     void autoNoShowRespectsGraceAndArrivalAndCanBeCorrectedToCompleted() {
+        var config = hospitalConfigService.getEntity();
+        config.setAutoNoShowEnabled(true);
+        config.setNoShowGraceMinutes(15);
+        try {
+            autoNoShowScenario();
+        } finally {
+            config.setAutoNoShowEnabled(false);
+            config.setNoShowGraceMinutes(30);
+        }
+    }
+
+    private void autoNoShowScenario() {
         Branch branch = createBranch("Sede-NoShow");
         Doctor doctor = createDoctorWithFullWeekSchedule(branch, createSpecialty("Esp-NoShow"));
         LocalDateTime longAgo = LocalDateTime.now().minusHours(3);
@@ -402,7 +455,7 @@ class FunctionalGapsTest extends AbstractIntegrationTest {
         Doctor doctorB = createDoctorWithFullWeekSchedule(branch, specialty);
         LocalDate date = LocalDate.now().plusDays(5);
         String phone = randomPhone();
-        String last = "Mismo-" + UUID.randomUUID().toString().substring(0, 6);
+        String last = "Mismo-" + randomLetters(6);
 
         var first = bookGuestOk(guest(doctorA, branch, date, LocalTime.of(10, 0), "Luis", last, phone));
         var second = bookGuestOk(guest(doctorA, branch, date, LocalTime.of(11, 0), "Luis", last, phone));
@@ -420,7 +473,7 @@ class FunctionalGapsTest extends AbstractIntegrationTest {
         Doctor doctor = createDoctorWithFullWeekSchedule(branch, createSpecialty("Esp-Limit"));
         LocalDate date = LocalDate.now().plusDays(6);
         String phone = randomPhone();
-        String last = "Acaparador-" + UUID.randomUUID().toString().substring(0, 6);
+        String last = "Acaparador-" + randomLetters(6);
 
         for (int i = 0; i < 5; i++) {
             bookGuestOk(guest(doctor, branch, date, LocalTime.of(8, 0).plusMinutes(30L * i), "Ivan", last, phone));
@@ -441,7 +494,7 @@ class FunctionalGapsTest extends AbstractIntegrationTest {
         insertAppointment(doctor, branch, target, LocalDateTime.of(date, LocalTime.of(10, 0)), 30, AppointmentStatus.SCHEDULED);
 
         ResponseEntity<String> response = call(HttpMethod.POST,
-                "/api/reception/patients/" + source.getId() + "/merge-into/" + target.getId(), null, receptionistToken());
+                "/api/reception/patients/" + source.getId() + "/merge-into/" + target.getId(), null, adminToken());
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 
         assertThat(appointmentRepository.findByPatient_IdOrderByAppointmentDateDescStartTimeDesc(target.getId())).hasSize(2);

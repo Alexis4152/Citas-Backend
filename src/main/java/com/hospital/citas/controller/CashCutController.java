@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 public class CashCutController {
 
     private final CashCutService cashCutService;
+    private final com.hospital.citas.report.ReportFileWriter fileWriter;
 
     /** Mi corte abierto con totales en vivo; {@code data} nulo si no tengo uno abierto. */
     @GetMapping("/current")
@@ -34,6 +35,15 @@ public class CashCutController {
     @PostMapping("/{id}/close")
     public ApiResponse<CashCutResponse> close(@PathVariable Long id, @Valid @RequestBody CashCutCloseRequest request) {
         return ApiResponse.ok(cashCutService.close(id, request), "Corte de caja cerrado");
+    }
+
+    /** Detalle del corte (resumen + cada cobro) en CSV, Excel o PDF. */
+    @GetMapping("/{id}/export")
+    public org.springframework.http.ResponseEntity<byte[]> export(@PathVariable Long id, @RequestParam(defaultValue = "pdf") String format) {
+        var fmt = com.hospital.citas.report.ReportFileWriter.Format.parse(format);
+        var table = cashCutService.report(id);
+        return ReportController.download(fileWriter.write(table, fmt, ReportController.currentUserName()),
+                com.hospital.citas.report.ReportFileWriter.fileName("corte de caja " + id, fmt), fmt);
     }
 
     @GetMapping("/{id}")

@@ -1,9 +1,10 @@
 package com.hospital.citas.service.impl;
 
 import com.hospital.citas.entity.Appointment;
+import com.hospital.citas.entity.Doctor;
 import com.hospital.citas.entity.HospitalConfig;
 import com.hospital.citas.entity.Prescription;
-import com.hospital.citas.enums.BloodType;
+import com.hospital.citas.pdf.LogoLoader;
 import com.hospital.citas.service.HospitalConfigService;
 import com.hospital.citas.service.PrescriptionReceiptService;
 import lombok.RequiredArgsConstructor;
@@ -11,502 +12,300 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
-import org.apache.pdfbox.pdmodel.font.PDFont;
-import org.apache.pdfbox.pdmodel.font.PDType1Font;
-import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.List;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.Locale;
+
+import static com.hospital.citas.pdf.PdfKit.*;
 
 /**
- * Genera la receta médica en PDF, en memoria -- mismo criterio visual (banda de marca, logo
- * opcional con fallback en cascada, panel de datos) que {@link AppointmentReceiptServiceImpl},
- * pero autocontenido: es el único otro PDF del sistema hasta ahora, así que extraer un kit
- * compartido sería una abstracción prematura para dos usos (ver guía de "no antes de que haga
- * falta"). Trae, en este orden: encabezado, datos de doctor/paciente, tipo de sangre
- * (mismo dato "congelado" de la cita que ya usa el comprobante -- ver
- * Appointment#bloodTypeSnapshot), el texto libre de la receta, y una línea de firma física para
- * el doctor (la firma se maneja en papel, no digital -- ver decisión de producto).
+ * Receta médica en PDF con formato de "hoja membretada": membrete con la marca del hospital y
+ * los datos del doctor (nombre, especialidad, cédula), franja con paciente / fecha / folio /
+ * tipo de sangre, diagnóstico, indicaciones con el símbolo Rx y espacio para la firma de puño y
+ * letra. Una receta larga sigue en hojas nuevas con membrete compacto y "Página n de N".
+ * <p>
+ * Las alergias NO se imprimen (decisión de producto: el doctor las ve en pantalla al recetar,
+ * pero no van en el papel que se lleva el paciente). El tipo de sangre es la foto tomada al
+ * agendar esta cita (Appointment#bloodTypeSnapshot).
  */
 @Service
 @RequiredArgsConstructor
 public class PrescriptionReceiptServiceImpl implements PrescriptionReceiptService {
 
-    private static final Logger log = LoggerFactory.getLogger(PrescriptionReceiptServiceImpl.class);
-    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    private static final Locale MX = Locale.forLanguageTag("es-MX");
+    private static final DateTimeFormatter LONG_DATE = DateTimeFormatter.ofPattern("d 'de' MMMM 'de' yyyy", MX);
+    private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
 
-    private static final float PAGE_W = PDRectangle.A4.getWidth();
-    private static final float PAGE_H = PDRectangle.A4.getHeight();
-    private static final float MARGIN = 45;
-
-    private static final int[] WHITE = {255, 255, 255};
-    private static final int[] INK = {31, 41, 55};
-    private static final int[] MUTED = {107, 114, 128};
-    private static final int[] PANEL_BG = {248, 250, 252};
-    private static final int[] BORDER = {226, 232, 240};
+    private static final float W = PDRectangle.A4.getWidth();
+    private static final float H = PDRectangle.A4.getHeight();
+    private static final float M = 46;
+    private static final float CW = W - M * 2;
+    private static final float BOTTOM = 70;
+    private static final float BODY_SIZE = 11;
+    private static final float LEADING = 16;
 
     private final HospitalConfigService hospitalConfigService;
+    private final LogoLoader logoLoader;
 
-    @Value("${app.uploads.dir}")
-    private String uploadsDir;
-
-    /** Límite inferior del texto (por encima de la banda del pie de página). */
-    private static final float CONTENT_BOTTOM = 60;
-
-    /** Estado de dibujo de un documento que puede crecer a varias hojas: la hoja actual, su
-     * flujo de contenido y el cursor vertical. Cada hoja nueva repite el encabezado y el pie
-     * de marca, para que una receta larga se vea igual de formal en todas sus páginas. */
+    /** Hoja actual y cursor vertical de un documento que puede crecer a varias hojas. */
     private final class Flow {
-        final PDDocument document;
+        final PDDocument doc;
         final HospitalConfig hospital;
+        final Doctor doctor;
         final int[] brand;
         final PDImageXObject logo;
-        PDPageContentStream content;
+        PDPageContentStream c;
         float y;
 
-        Flow(PDDocument document, HospitalConfig hospital, int[] brand) {
-            this.document = document;
+        Flow(PDDocument doc, HospitalConfig hospital, Doctor doctor, int[] brand) {
+            this.doc = doc;
             this.hospital = hospital;
+            this.doctor = doctor;
             this.brand = brand;
-            this.logo = loadLogo(document, hospital);
+            this.logo = logoLoader.load(doc, hospital.getLogoUrl());
         }
 
-        void startPage(boolean continuation) throws IOException {
-            if (content != null) {
-                content.close();
-            }
+        void newPage(boolean continuation) throws IOException {
+            if (c != null) c.close();
             PDPage page = new PDPage(PDRectangle.A4);
-            document.addPage(page);
-            content = new PDPageContentStream(document, page);
-            y = drawHeader(content, logo, hospital, brand, continuation ? "Receta médica (continuación)" : "Receta médica");
-            drawFooter(content, hospital, brand);
+            doc.addPage(page);
+            c = new PDPageContentStream(doc, page);
+            y = continuation ? compactHeader(this) : letterhead(this);
+            footer(this);
         }
 
-        /** Salta a una hoja nueva si lo que sigue ({@code needed} de alto) ya no cabe. */
-        void ensureSpace(float needed) throws IOException {
-            if (y - needed < CONTENT_BOTTOM) {
-                startPage(true);
-            }
+        void ensure(float needed) throws IOException {
+            if (y - needed < BOTTOM) newPage(true);
         }
 
         void finish() throws IOException {
-            if (content != null) {
-                content.close();
-                content = null;
-            }
+            if (c != null) c.close();
+            c = null;
         }
     }
 
     @Override
     public byte[] build(Prescription prescription) {
         HospitalConfig hospital = hospitalConfigService.getEntity();
-        int[] brand = hexToRgb(hospital.getPrimaryColor());
         Appointment appointment = prescription.getAppointment();
-
-        try (PDDocument document = new PDDocument()) {
-            Flow flow = new Flow(document, hospital, brand);
-            flow.startPage(false);
-            flow.y -= 20;
-            flow.y = drawInfoPanel(flow.content, appointment, flow.y);
-            flow.y -= 26;
-            flow.y = drawBloodTypeStrip(flow.content, appointment, flow.y);
-            flow.y -= 26;
+        int[] brand = hexToRgb(hospital.getPrimaryColor());
+        try (PDDocument doc = new PDDocument()) {
+            Flow f = new Flow(doc, hospital, appointment.getDoctor(), brand);
+            f.newPage(false);
+            infoStrip(f, prescription, appointment);
+            if (prescription.isVoided()) voided(f, prescription);
+            if (prescription.getDiagnosis() != null && !prescription.getDiagnosis().isBlank()) diagnosis(f, prescription.getDiagnosis());
+            indications(f, prescription.getContent());
+            signature(f);
+            f.finish();
             if (prescription.isVoided()) {
-                drawVoidedBanner(flow, prescription);
-                flow.y -= 20;
+                for (PDPage page : doc.getPages()) {
+                    try (PDPageContentStream c = new PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                        watermark(c, "ANULADA", W, H, RED);
+                    }
+                }
             }
-            if (prescription.getDiagnosis() != null && !prescription.getDiagnosis().isBlank()) {
-                drawSection(flow, "DIAGNÓSTICO", prescription.getDiagnosis());
-                flow.y -= 14;
-            }
-            drawSection(flow, "INDICACIONES", prescription.getContent());
-            drawSignature(flow, appointment);
-            flow.finish();
-            addPageNumbers(document);
-
+            pageNumbers(doc);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            document.save(out);
+            doc.save(out);
             return out.toByteArray();
         } catch (IOException e) {
             throw new IllegalStateException("No se pudo generar la receta en PDF", e);
         }
     }
 
-    // ── Secciones ────────────────────────────────────────────────
+    // ── Membrete ─────────────────────────────────────────────────
 
-    private float drawHeader(PDPageContentStream content, PDImageXObject logo, HospitalConfig hospital, int[] brand,
-                              String subtitle) throws IOException {
-        float bandHeight = 100;
-        float bandY = PAGE_H - bandHeight;
-        fillRect(content, 0, bandY, PAGE_W, bandHeight, brand);
+    private float letterhead(Flow f) throws IOException {
+        PDPageContentStream c = f.c;
+        fill(c, 0, H - 8, W, 8, f.brand);
+        float top = H - 34;
+        float tile = 50;
+        logoTile(f, M, top - tile, tile);
+        float tx = M + tile + 14;
+        text(c, BOLD, 16, tx, top - 20, truncate(f.hospital.getName(), BOLD, 16, 230), INK);
+        String contact = AppointmentReceiptServiceImpl.join(" · ", f.hospital.getContactPhone(), f.hospital.getContactEmail());
+        if (!contact.isEmpty()) text(c, REGULAR, 8.5f, tx, top - 36, truncate(contact, REGULAR, 8.5f, 230), MUTED);
+        label(c, tx, top - 50, "Receta médica", f.brand);
 
-        float textX = MARGIN;
-        if (logo != null) {
-            float logoSize = 56;
-            float logoY = bandY + (bandHeight - logoSize) / 2;
-            float logoWidth = logo.getHeight() > 0 ? logo.getWidth() * (logoSize / logo.getHeight()) : logoSize;
-            content.drawImage(logo, MARGIN, logoY, logoWidth, logoSize);
-            textX = MARGIN + logoWidth + 16;
-        }
-
-        text(content, PDType1Font.HELVETICA_BOLD, 20, textX, bandY + 62, hospital.getName(), WHITE);
-        text(content, PDType1Font.HELVETICA, 11, textX, bandY + 42, subtitle, WHITE);
-        return bandY - 30;
+        // Doctor a la derecha, como en un recetario.
+        float right = W - M;
+        String name = "Dr(a). " + f.doctor.getUser().getFirstName() + " " + f.doctor.getUser().getLastName();
+        textRight(c, BOLD, 14, right, top - 18, truncate(name, BOLD, 14, 220), INK);
+        textRight(c, REGULAR, 10, right, top - 34, f.doctor.getSpecialty().getName(), shade(f.brand, 0.15));
+        String license = f.doctor.getLicenseNumber();
+        textRight(c, REGULAR, 8.5f, right, top - 48,
+                license != null && !license.isBlank() ? "Cédula profesional " + license : "Cédula profesional no registrada", MUTED);
+        float lineY = top - tile - 14;
+        line(c, M, lineY, W - M, lineY, f.brand, 1.2f);
+        return lineY - 18;
     }
 
-    /** "Página n de N" en la banda del pie -- solo cuando la receta ocupa más de una hoja. */
-    private void addPageNumbers(PDDocument document) throws IOException {
-        int total = document.getNumberOfPages();
-        if (total < 2) {
+    private float compactHeader(Flow f) throws IOException {
+        fill(f.c, 0, H - 6, W, 6, f.brand);
+        float top = H - 30;
+        text(f.c, BOLD, 11, M, top - 10, f.hospital.getName(), INK);
+        textRight(f.c, REGULAR, 9, W - M, top - 10, "Receta médica (continuación)", MUTED);
+        line(f.c, M, top - 20, W - M, top - 20, LINE, 0.8f);
+        return top - 40;
+    }
+
+    private void logoTile(Flow f, float x, float y, float size) throws IOException {
+        roundFill(f.c, x, y, size, size, 12, tint(f.brand, 0.9));
+        if (f.logo != null) {
+            float scale = Math.min((size - 8) / f.logo.getWidth(), (size - 8) / f.logo.getHeight());
+            float lw = f.logo.getWidth() * scale;
+            float lh = f.logo.getHeight() * scale;
+            roundFill(f.c, x, y, size, size, 12, WHITE);
+            roundStroke(f.c, x, y, size, size, 12, LINE, 0.8f);
+            f.c.drawImage(f.logo, x + (size - lw) / 2, y + (size - lh) / 2, lw, lh);
+        } else {
+            textCenter(f.c, BOLD, 18, x + size / 2, y + size / 2 - 6, initials(f.hospital.getName()), shade(f.brand, 0.1));
+        }
+    }
+
+    // ── Cuerpo ───────────────────────────────────────────────────
+
+    private void infoStrip(Flow f, Prescription p, Appointment a) throws IOException {
+        float h = 56;
+        float y = f.y - h;
+        roundFill(f.c, M, y, CW, h, 12, PANEL);
+        LocalDateTime issued = p.getCreatedAt() != null ? p.getCreatedAt() : LocalDateTime.now();
+        var patient = a.getPatient();
+        String ageSex = AppointmentReceiptServiceImpl.join(" · ",
+                patient.getBirthDate() != null ? java.time.Period.between(patient.getBirthDate(), java.time.LocalDate.now()).getYears() + " años" : null,
+                patient.getSex() == null ? null : switch (patient.getSex()) { case "F" -> "Femenino"; case "M" -> "Masculino"; default -> "Otro"; });
+        String[][] cols = {
+                {"Paciente", patient.getFirstName() + " " + patient.getLastName()},
+                {"Edad / sexo", ageSex.isEmpty() ? "—" : ageSex},
+                {"Fecha", issued.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))},
+                {"Folio", "RX-" + String.format("%06d", p.getId())},
+                {"Tipo de sangre", AppointmentReceiptServiceImpl.bloodType(a.getBloodTypeSnapshot(), a.getBloodTypeOtherSnapshot())},
+        };
+        // El nombre del paciente es lo más largo: se lleva casi la mitad de la franja.
+        float[] weights = {0.34f, 0.19f, 0.16f, 0.16f, 0.15f};
+        float x0 = M;
+        for (int i = 0; i < cols.length; i++) {
+            float colW = CW * weights[i];
+            float x = x0 + 16;
+            label(f.c, x, y + h - 20, cols[i][0], MUTED);
+            text(f.c, BOLD, 10.5f, x, y + 17, truncate(cols[i][1], BOLD, 10.5f, colW - 24), INK_SOFT);
+            if (i > 0) line(f.c, x0, y + 12, x0, y + h - 12, LINE, 0.8f);
+            x0 += colW;
+        }
+        f.y = y - 22;
+    }
+
+    private void voided(Flow f, Prescription p) throws IOException {
+        String reason = "Motivo: " + (p.getVoidReason() == null ? "sin motivo" : p.getVoidReason())
+                + (p.getVoidedAt() != null ? "  ·  Anulada el " + p.getVoidedAt().format(STAMP) : "");
+        List<String> lines = wrap(reason, REGULAR, 9.5f, CW - 32, 3);
+        float h = 38 + lines.size() * 13;
+        f.ensure(h);
+        float y = f.y - h;
+        roundFill(f.c, M, y, CW, h, 12, RED_BG);
+        roundStroke(f.c, M, y, CW, h, 12, new int[]{252, 165, 165}, 0.8f);
+        text(f.c, BOLD, 12, M + 16, f.y - 22, "RECETA ANULADA - NO VIGENTE", RED);
+        lines(f.c, lines, REGULAR, 9.5f, M + 16, f.y - 38, 13, RED);
+        f.y = y - 18;
+    }
+
+    private void diagnosis(Flow f, String text) throws IOException {
+        List<String> lines = wrap(text, REGULAR, 10.5f, CW - 36, 0);
+        float h = 36 + lines.size() * 15;
+        if (h > f.y - BOTTOM) {
+            // Diagnóstico muy largo: sin tarjeta, como texto corrido que pagina.
+            paragraphs(f, "Diagnóstico", text);
             return;
         }
-        for (int i = 0; i < total; i++) {
-            try (PDPageContentStream c = new PDPageContentStream(document, document.getPage(i),
-                    PDPageContentStream.AppendMode.APPEND, true, true)) {
-                String label = "Página " + (i + 1) + " de " + total;
-                float w = PDType1Font.HELVETICA.getStringWidth(sanitize(label)) / 1000 * 9;
-                text(c, PDType1Font.HELVETICA, 9, PAGE_W - MARGIN - w, 34 / 2f - 3, label, WHITE);
-            }
-        }
+        float y = f.y - h;
+        roundFill(f.c, M, y, CW, h, 12, tint(f.brand, 0.94));
+        fill(f.c, M, y + 10, 3, h - 20, f.brand);
+        label(f.c, M + 18, f.y - 20, "Diagnóstico", shade(f.brand, 0.2));
+        lines(f.c, lines, REGULAR, 10.5f, M + 18, f.y - 36, 15, INK_SOFT);
+        f.y = y - 22;
     }
 
-    private static final float VALUE_FONT_SIZE = 12;
-
-    /** Panel con los datos de doctor/paciente/fecha, mismo estilo "resumen" que el comprobante
-     * de cita (etiqueta chica arriba, valor grande abajo). */
-    private float drawInfoPanel(PDPageContentStream content, Appointment appointment, float y) throws IOException {
-        float innerPadding = 18;
-        float contentWidth = (PAGE_W - MARGIN * 2) - innerPadding * 2;
-        float colGap = 24;
-        float colWidth = (contentWidth - colGap) / 2;
-        float rowHeight = 46;
-        float panelHeight = rowHeight * 2 + 24;
-        float panelTop = y;
-        float panelBottom = panelTop - panelHeight;
-
-        fillRect(content, MARGIN, panelBottom, PAGE_W - MARGIN * 2, panelHeight, PANEL_BG);
-        strokeRect(content, MARGIN, panelBottom, PAGE_W - MARGIN * 2, panelHeight, BORDER);
-
-        float innerX = MARGIN + innerPadding;
-        float innerY = panelTop - 26;
-        float col2X = innerX + colWidth + colGap;
-
-        String patientLine = appointment.getPatient().getFirstName() + " " + appointment.getPatient().getLastName();
-        String doctorLine = "Dr(a). " + appointment.getDoctor().getUser().getFirstName() + " "
-                + appointment.getDoctor().getUser().getLastName() + " · " + appointment.getDoctor().getSpecialty().getName();
-
-        field(content, innerX, innerY, "PACIENTE", truncateToWidth(patientLine, colWidth));
-        field(content, col2X, innerY, "DOCTOR", truncateToWidth(doctorLine, colWidth));
-        innerY -= rowHeight;
-
-        String license = appointment.getDoctor().getLicenseNumber();
-        field(content, innerX, innerY, "FECHA DE EMISIÓN", LocalDate.now().format(DATE_FMT));
-        field(content, col2X, innerY, "CÉDULA PROFESIONAL",
-                license != null && !license.isBlank() ? license : "No especificada");
-
-        return panelBottom;
-    }
-
-    /** Solo el tipo de sangre del paciente -- las alergias NO se imprimen en la receta (decisión
-     * de producto: el doctor las ve en pantalla al generarla, ver DoctorAgenda.jsx, pero no
-     * deben quedar en el papel que se lleva el paciente). Se usa la foto tomada al agendar esta
-     * cita (bloodTypeSnapshot), no el dato vigente del paciente, por la misma razón que el
-     * comprobante: que la receta refleje lo que era cierto en esa visita. */
-    private float drawBloodTypeStrip(PDPageContentStream content, Appointment appointment, float y) throws IOException {
-        String bloodType = bloodTypeLabel(appointment.getBloodTypeSnapshot(), appointment.getBloodTypeOtherSnapshot());
-
-        float bandHeight = 30;
-        float bandTop = y;
-        float bandBottom = bandTop - bandHeight;
-        fillRect(content, MARGIN, bandBottom, PAGE_W - MARGIN * 2, bandHeight, PANEL_BG);
-        strokeRect(content, MARGIN, bandBottom, PAGE_W - MARGIN * 2, bandHeight, BORDER);
-        text(content, PDType1Font.HELVETICA_BOLD, 11, MARGIN + 14, bandBottom + 11,
-                "TIPO DE SANGRE: " + bloodType, INK);
-        return bandBottom;
-    }
-
-    /** Aviso en rojo cuando la receta fue anulada: sigue existiendo (documento médico), pero
-     * quien la lea debe saber que ya no es vigente y por qué. */
-    private void drawVoidedBanner(Flow flow, Prescription prescription) throws IOException {
-        int[] red = {185, 28, 28};
-        int[] redBg = {254, 226, 226};
-        String when = prescription.getVoidedAt().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"));
-        String reason = "Motivo: " + (prescription.getVoidReason() == null ? "" : prescription.getVoidReason())
-                + " (anulada el " + when + ")";
-        List<String> lines = wrapToLines(PDType1Font.HELVETICA, 10, reason, PAGE_W - MARGIN * 2 - 28);
-        float height = 34 + 14 * lines.size();
-        flow.ensureSpace(height + 4);
-        float bottom = flow.y - height;
-        fillRect(flow.content, MARGIN, bottom, PAGE_W - MARGIN * 2, height, redBg);
-        strokeRect(flow.content, MARGIN, bottom, PAGE_W - MARGIN * 2, height, red);
-        text(flow.content, PDType1Font.HELVETICA_BOLD, 13, MARGIN + 14, flow.y - 20, "RECETA ANULADA - NO VIGENTE", red);
-        float lineY = flow.y - 36;
-        for (String line : lines) {
-            text(flow.content, PDType1Font.HELVETICA, 10, MARGIN + 14, lineY, line, INK);
-            lineY -= 14;
-        }
-        flow.y = bottom;
-    }
-
-    /** Sección de texto libre de la receta (DIAGNÓSTICO e INDICACIONES) -- lo que el doctor
-     * escribió (diagnóstico, indicaciones, dosis, medicamentos). Si no cabe en la hoja
-     * actual, sigue en una hoja nueva con el mismo encabezado y pie. */
-    private void drawSection(Flow flow, String title, String body) throws IOException {
-        flow.ensureSpace(20 + 16);
-        text(flow.content, PDType1Font.HELVETICA_BOLD, 12, MARGIN, flow.y, title, MUTED);
-        flow.y -= 20;
-        float maxWidth = PAGE_W - MARGIN * 2;
-        // Cada renglón que escribió el doctor (un medicamento por línea, típicamente) se
-        // respeta como su propio párrafo -- sanitize() convierte los saltos de línea en
-        // espacios, así que envolver todo el texto de un jalón fundía la receta en un solo
-        // párrafo corrido.
-        for (String paragraph : body.split("\\R", -1)) {
+    private void indications(Flow f, String content) throws IOException {
+        f.ensure(70);
+        text(f.c, BOLD, 30, M, f.y - 26, "Rx", f.brand);
+        label(f.c, M + 50, f.y - 14, "Indicaciones", MUTED);
+        line(f.c, M + 50, f.y - 22, W - M, f.y - 22, LINE, 0.8f);
+        f.y -= 44;
+        float x = M + 50;
+        float maxW = W - M - x;
+        int n = 0;
+        for (String paragraph : (content == null ? "" : content).split("\\R", -1)) {
             if (paragraph.isBlank()) {
-                flow.y -= 10;
+                f.y -= 8;
                 continue;
             }
-            List<String> lines = wrapToLines(PDType1Font.HELVETICA, 11, paragraph, maxWidth);
-            for (int i = 0; i < lines.size(); i++) {
-                flow.ensureSpace(16);
-                boolean last = i == lines.size() - 1;
-                drawLine(flow.content, PDType1Font.HELVETICA, 11, MARGIN, flow.y, lines.get(i), INK, last ? 0 : maxWidth);
-                flow.y -= 16;
+            List<String> lines = wrap(paragraph, REGULAR, BODY_SIZE, maxW - 18, 0);
+            f.ensure(LEADING + 4);
+            n++;
+            // Cada renglón que escribió el doctor (típicamente un medicamento) lleva su número.
+            roundFill(f.c, x, f.y - 4, 13, 13, 6.5f, tint(f.brand, 0.85));
+            textCenter(f.c, BOLD, 7.5f, x + 6.5f, f.y - 0.5f, String.valueOf(n), shade(f.brand, 0.2));
+            for (String l : lines) {
+                f.ensure(LEADING);
+                text(f.c, REGULAR, BODY_SIZE, x + 20, f.y, l, INK);
+                f.y -= LEADING;
             }
-            flow.y -= 4;
+            f.y -= 6;
         }
     }
 
-    /** Línea para firma de puño y letra del doctor sobre el papel impreso (no firma digital --
-     * ver decisión de producto), con su nombre y cédula profesional impresos debajo -- como en
-     * una receta física real. En una receta corta queda fija cerca del pie de página; si el
-     * texto llega hasta ahí, se recorre para ir justo al final del contenido, y si ya no cabe
-     * en la hoja, pasa a una hoja nueva. */
-    private void drawSignature(Flow flow, Appointment appointment) throws IOException {
-        float lineY = Math.min(150, flow.y - 40);
-        if (lineY - 42 < 54) {
-            flow.startPage(true);
-            lineY = flow.y - 30;
+    private void paragraphs(Flow f, String title, String body) throws IOException {
+        f.ensure(40);
+        label(f.c, M, f.y, title, MUTED);
+        f.y -= 18;
+        for (String l : wrap(body, REGULAR, BODY_SIZE, CW, 0)) {
+            f.ensure(LEADING);
+            text(f.c, REGULAR, BODY_SIZE, M, f.y, l, INK);
+            f.y -= LEADING;
         }
-        PDPageContentStream content = flow.content;
-        float lineWidth = 220;
-        float lineX = PAGE_W - MARGIN - lineWidth;
-
-        content.setStrokingColor(INK[0], INK[1], INK[2]);
-        content.setLineWidth(1);
-        content.moveTo(lineX, lineY);
-        content.lineTo(lineX + lineWidth, lineY);
-        content.stroke();
-
-        String doctorName = "Dr(a). " + appointment.getDoctor().getUser().getFirstName() + " "
-                + appointment.getDoctor().getUser().getLastName();
-        String license = appointment.getDoctor().getLicenseNumber();
-        String licenseLine = "Cédula profesional: " + (license != null && !license.isBlank() ? license : "No especificada");
-
-        text(content, PDType1Font.HELVETICA_BOLD, 11, lineX, lineY - 16, doctorName, INK);
-        text(content, PDType1Font.HELVETICA, 9, lineX, lineY - 29, licenseLine, MUTED);
-        text(content, PDType1Font.HELVETICA, 8, lineX, lineY - 42, "Firma del médico", MUTED);
+        f.y -= 14;
     }
 
-    private void drawFooter(PDPageContentStream content, HospitalConfig hospital, int[] brand) throws IOException {
-        float bandHeight = 34;
-        fillRect(content, 0, 0, PAGE_W, bandHeight, brand);
-        String contact = joinNonBlank(" · ", hospital.getContactPhone(), hospital.getContactEmail());
-        String footerText = contact.isEmpty() ? "Documento generado por el sistema de citas" : contact;
-        float textWidth = PDType1Font.HELVETICA.getStringWidth(footerText) / 1000 * 9;
-        text(content, PDType1Font.HELVETICA, 9, (PAGE_W - textWidth) / 2, bandHeight / 2 - 3, footerText, WHITE);
-    }
-
-    private String bloodTypeLabel(BloodType bloodType, String bloodTypeOther) {
-        if (bloodType == null) {
-            return "No especificado";
+    /** Firma de puño y letra sobre el papel (no hay firma digital), con nombre y cédula impresos. */
+    private void signature(Flow f) throws IOException {
+        float lineY = Math.min(150, f.y - 50);
+        if (lineY - 40 < BOTTOM) {
+            f.newPage(true);
+            lineY = f.y - 60;
         }
-        return switch (bloodType) {
-            case A_POSITIVE -> "A+";
-            case A_NEGATIVE -> "A-";
-            case B_POSITIVE -> "B+";
-            case B_NEGATIVE -> "B-";
-            case AB_POSITIVE -> "AB+";
-            case AB_NEGATIVE -> "AB-";
-            case O_POSITIVE -> "O+";
-            case O_NEGATIVE -> "O-";
-            case OTHER -> bloodTypeOther != null && !bloodTypeOther.isBlank()
-                    ? "Otro (" + bloodTypeOther + ")" : "Otro";
-        };
+        float w = 230;
+        float x = W - M - w;
+        line(f.c, x, lineY, x + w, lineY, INK_SOFT, 0.9f);
+        String name = "Dr(a). " + f.doctor.getUser().getFirstName() + " " + f.doctor.getUser().getLastName();
+        textCenter(f.c, BOLD, 10, x + w / 2, lineY - 14, truncate(name, BOLD, 10, w), INK);
+        String license = f.doctor.getLicenseNumber();
+        textCenter(f.c, REGULAR, 8.5f, x + w / 2, lineY - 27,
+                license != null && !license.isBlank() ? "Céd. prof. " + license : f.doctor.getSpecialty().getName(), MUTED);
+        text(f.c, ITALIC, 8.5f, M, lineY - 14, "Esta receta solo es válida con la firma del médico.", FAINT);
+        f.y = lineY - 40;
     }
 
-    // ── Helpers de dibujo (ver AppointmentReceiptServiceImpl para el mismo patrón) ──────
-
-    private void field(PDPageContentStream content, float x, float y, String label, String value) throws IOException {
-        text(content, PDType1Font.HELVETICA_BOLD, 8, x, y, label, MUTED);
-        text(content, PDType1Font.HELVETICA_BOLD, VALUE_FONT_SIZE, x, y - 16, value, INK);
+    private void footer(Flow f) throws IOException {
+        line(f.c, M, 50, W - M, 50, LINE, 0.8f);
+        String contact = AppointmentReceiptServiceImpl.join(" · ", f.hospital.getName(), f.hospital.getContactPhone(),
+                AppointmentReceiptServiceImpl.hospitalAddress(f.hospital));
+        text(f.c, REGULAR, 7.5f, M, 36, truncate(contact, REGULAR, 7.5f, CW - 90), MUTED);
+        text(f.c, REGULAR, 7, M, 25, "Generada el " + LocalDateTime.now().format(STAMP) + " con Nexora Citas", FAINT);
     }
 
-    private String truncateToWidth(String value, float maxWidth) throws IOException {
-        PDFont font = PDType1Font.HELVETICA_BOLD;
-        String sanitized = sanitize(value);
-        if (font.getStringWidth(sanitized) / 1000 * VALUE_FONT_SIZE <= maxWidth) {
-            return sanitized;
-        }
-        String ellipsis = "...";
-        StringBuilder result = new StringBuilder();
-        for (char c : sanitized.toCharArray()) {
-            String candidate = result + String.valueOf(c) + ellipsis;
-            if (font.getStringWidth(candidate) / 1000 * VALUE_FONT_SIZE > maxWidth) {
-                break;
-            }
-            result.append(c);
-        }
-        return result + ellipsis;
-    }
-
-    private void text(PDPageContentStream content, PDFont font, float size, float x, float y, String value, int[] rgb) throws IOException {
-        content.setNonStrokingColor(rgb[0], rgb[1], rgb[2]);
-        content.beginText();
-        content.setFont(font, size);
-        content.newLineAtOffset(x, y);
-        content.showText(sanitize(value));
-        content.endText();
-    }
-
-    /** Parte un párrafo en renglones que caben en {@code maxWidth} (PDFBox no hace word-wrap). */
-    private List<String> wrapToLines(PDFont font, float size, String value, float maxWidth) throws IOException {
-        List<String> lines = new ArrayList<>();
-        StringBuilder line = new StringBuilder();
-        for (String word : sanitize(value).split(" ")) {
-            String candidate = line.isEmpty() ? word : line + " " + word;
-            if (font.getStringWidth(candidate) / 1000 * size > maxWidth && !line.isEmpty()) {
-                lines.add(line.toString());
-                line = new StringBuilder(word);
-            } else {
-                line = new StringBuilder(candidate);
+    private void pageNumbers(PDDocument doc) throws IOException {
+        int total = doc.getNumberOfPages();
+        for (int i = 0; i < total; i++) {
+            try (PDPageContentStream c = new PDPageContentStream(doc, doc.getPage(i), PDPageContentStream.AppendMode.APPEND, true, true)) {
+                textRight(c, BOLD, 7.5f, W - M, 36, "Página " + (i + 1) + " de " + total, MUTED);
             }
         }
-        if (!line.isEmpty()) {
-            lines.add(line.toString());
-        }
-        return lines;
-    }
-
-    private void fillRect(PDPageContentStream content, float x, float y, float w, float h, int[] rgb) throws IOException {
-        content.setNonStrokingColor(rgb[0], rgb[1], rgb[2]);
-        content.addRect(x, y, w, h);
-        content.fill();
-    }
-
-    private void strokeRect(PDPageContentStream content, float x, float y, float w, float h, int[] rgb) throws IOException {
-        content.setStrokingColor(rgb[0], rgb[1], rgb[2]);
-        content.setLineWidth(1);
-        content.addRect(x, y, w, h);
-        content.stroke();
-    }
-
-    private void drawLine(PDPageContentStream content, PDFont font, float size, float x, float y,
-                          String line, int[] rgb, float justifyWidth) throws IOException {
-        String[] words = line.split(" ");
-        if (justifyWidth <= 0 || words.length < 2) {
-            text(content, font, size, x, y, line, rgb);
-            return;
-        }
-        float wordsWidth = 0;
-        for (String w : words) {
-            wordsWidth += font.getStringWidth(w) / 1000 * size;
-        }
-        float gap = (justifyWidth - wordsWidth) / (words.length - 1);
-        if (gap > font.getStringWidth(" ") / 1000 * size * 3) {
-            text(content, font, size, x, y, line, rgb);
-            return;
-        }
-        float cursor = x;
-        for (String w : words) {
-            text(content, font, size, cursor, y, w, rgb);
-            cursor += font.getStringWidth(w) / 1000 * size + gap;
-        }
-    }
-
-    private String sanitize(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value.replace('—', '-').replace('–', '-')
-                .replace('“', '"').replace('”', '"')
-                .replace('‘', '\'').replace('’', '\'')
-                .replaceAll("[\\r\\n\\t]+", " ")
-                .trim();
-    }
-
-    private String joinNonBlank(String separator, String... parts) {
-        StringBuilder sb = new StringBuilder();
-        for (String part : parts) {
-            if (part != null && !part.isBlank()) {
-                if (!sb.isEmpty()) {
-                    sb.append(separator);
-                }
-                sb.append(part);
-            }
-        }
-        return sb.toString();
-    }
-
-    private int[] hexToRgb(String hex) {
-        try {
-            String clean = hex != null ? hex.replace("#", "") : "0F766E";
-            if (clean.length() != 6) {
-                clean = "0F766E";
-            }
-            return new int[]{
-                    Integer.parseInt(clean.substring(0, 2), 16),
-                    Integer.parseInt(clean.substring(2, 4), 16),
-                    Integer.parseInt(clean.substring(4, 6), 16)
-            };
-        } catch (NumberFormatException e) {
-            return new int[]{15, 118, 110};
-        }
-    }
-
-    // Mismo criterio de caché que AppointmentReceiptServiceImpl (un PDImageXObject no se
-    // puede reusar entre PDDocument distintos, pero el BufferedImage decodificado sí).
-    private volatile String cachedLogoUrl;
-    private volatile BufferedImage cachedLogoImage;
-
-    private PDImageXObject loadLogo(PDDocument document, HospitalConfig hospital) {
-        String logoUrl = hospital.getLogoUrl();
-        if (logoUrl == null || logoUrl.isBlank()) {
-            return null;
-        }
-        try {
-            BufferedImage image = loadLogoImageCached(logoUrl);
-            return image != null ? LosslessFactory.createFromImage(document, image) : null;
-        } catch (IOException | RuntimeException e) {
-            log.warn("No se pudo cargar el logo del hospital para la receta; se omite", e);
-            return null;
-        }
-    }
-
-    private BufferedImage loadLogoImageCached(String logoUrl) throws IOException {
-        if (logoUrl.equals(cachedLogoUrl) && cachedLogoImage != null) {
-            return cachedLogoImage;
-        }
-        Path logoPath = Paths.get(uploadsDir, logoUrl);
-        if (!Files.exists(logoPath)) {
-            return null;
-        }
-        BufferedImage image = ImageIO.read(logoPath.toFile());
-        cachedLogoUrl = logoUrl;
-        cachedLogoImage = image;
-        return image;
     }
 }

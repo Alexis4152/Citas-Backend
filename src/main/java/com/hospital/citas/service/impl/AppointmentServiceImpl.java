@@ -78,15 +78,22 @@ public class AppointmentServiceImpl implements AppointmentService {
     private final NotificationService notificationService;
     private final com.hospital.citas.service.PaymentService paymentService;
     private final DoctorScope doctorScope;
+    private final com.hospital.citas.service.SlotHoldService slotHoldService;
+    private final com.hospital.citas.service.AvailabilityEvents availabilityEvents;
+    private final com.hospital.citas.security.PermissionService permissionService;
+    private final com.hospital.citas.service.HospitalConfigService hospitalConfigService;
 
-    @Value("${app.appointments.no-show-grace-minutes:15}")
-    private int noShowGraceMinutes;
     @Value("${app.appointments.max-active-per-patient:5}")
     private int maxActivePerPatient;
     @Value("${app.appointments.max-active-per-phone:10}")
     private int maxActivePerPhone;
     @Value("${app.appointments.self-reschedule-min-hours:24}")
     private int selfRescheduleMinHours;
+    /** Al cancelar una cita cuyo horario todavía no llega, el espacio vuelve a quedar libre de
+     * inmediato para que alguien más lo agende. En false se conserva la regla anterior (la
+     * cancelación ocupa el espacio hasta que recepción lo libera a mano). */
+    @Value("${app.appointments.auto-release-on-cancel:true}")
+    private boolean autoReleaseOnCancel;
     private final TenantLinks tenantLinks;
 
     @Override
@@ -105,7 +112,8 @@ public class AppointmentServiceImpl implements AppointmentService {
         patientService.applyMedicalInfo(patient, request.getMedicalInfo(), null);
 
         Appointment appointment = createAndPersist(doctor, branch, patient, request.getAppointmentDate(),
-                request.getStartTime(), endTime, request.getReasonForVisit(), null, false, true, true);
+                request.getStartTime(), endTime, request.getReasonForVisit(), null, false, true, true,
+                request.getHoldToken(), request.getHolderKey());
 
         notifyNewAppointment(appointment);
         return appointmentMapper.toResponse(appointment, true);
@@ -127,7 +135,8 @@ public class AppointmentServiceImpl implements AppointmentService {
         patientService.applyMedicalInfo(patient, request.getMedicalInfo(), currentUser);
 
         Appointment appointment = createAndPersist(doctor, branch, patient, request.getAppointmentDate(),
-                request.getStartTime(), endTime, request.getReasonForVisit(), null, false, true, false);
+                request.getStartTime(), endTime, request.getReasonForVisit(), null, false, true, false,
+                request.getHoldToken(), request.getHolderKey());
 
         notifyNewAppointment(appointment);
         return appointmentMapper.toResponse(appointment, true);
@@ -137,6 +146,9 @@ public class AppointmentServiceImpl implements AppointmentService {
     @Transactional
     public AppointmentResponse bookForPatient(ReceptionAppointmentRequest request) {
         User actingUser = requireCurrentUser();
+        if (Boolean.TRUE.equals(request.getOverbook())) {
+            permissionService.require(actingUser, com.hospital.citas.security.Permission.APPOINTMENTS_OVERBOOK);
+        }
         Doctor doctor = findActiveDoctor(request.getDoctorId());
         checkReceptionistSpecialtyAllowed(actingUser, doctor, "agendar citas");
         Branch branch = findActiveBranch(request.getBranchId());
@@ -153,7 +165,7 @@ public class AppointmentServiceImpl implements AppointmentService {
 
         Appointment appointment = createAndPersist(doctor, branch, patient, request.getAppointmentDate(),
                 request.getStartTime(), endTime, request.getReasonForVisit(), actingUser,
-                Boolean.TRUE.equals(request.getOverbook()), false, false);
+                Boolean.TRUE.equals(request.getOverbook()), false, false, null, null);
 
         notifyNewAppointment(appointment);
         return appointmentMapper.toResponse(appointment);
@@ -211,6 +223,7 @@ public class AppointmentServiceImpl implements AppointmentService {
         appointment.setReleasedAt(LocalDateTime.now());
         appointment.setUpdatedBy(currentUser);
         appointment = appointmentRepository.save(appointment);
+        availabilityEvents.publishAfterCommit(appointment.getDoctor().getId());
 
         String roleLabel = switch (currentUser.getRole().getName()) {
             case DOCTOR -> "el doctor";
@@ -281,6 +294,7 @@ public class AppointmentServiceImpl implements AppointmentService {
         LocalTime oldStartTime = appointment.getStartTime();
 
         Long currentAppointmentId = appointment.getId();
+        doctorRepository.lockById(doctor.getId());
         List<Appointment> occupants = appointmentRepository
                 .lockOccupantsForSlot(doctor.getId(), request.getAppointmentDate(), request.getStartTime(), endTime).stream()
                 .filter(a -> !a.getId().equals(currentAppointmentId))
@@ -288,6 +302,8 @@ public class AppointmentServiceImpl implements AppointmentService {
         if (!occupants.isEmpty()) {
             throw new SlotUnavailableException("El horario seleccionado ya no está disponible");
         }
+        slotHoldService.requireNotHeldByOthers(doctor.getId(), request.getAppointmentDate(), request.getStartTime(),
+                endTime, request.getHoldToken(), request.getHolderKey());
         requireNoPatientOverlap(appointment.getPatient(), request.getAppointmentDate(), request.getStartTime(), endTime,
                 currentAppointmentId);
 
@@ -312,6 +328,8 @@ public class AppointmentServiceImpl implements AppointmentService {
         }
 
         recordHistory(appointment, AppointmentStatus.SCHEDULED, AppointmentStatus.SCHEDULED, actingUser, historyNote);
+        slotHoldService.consume(request.getHoldToken(), request.getHolderKey());
+        availabilityEvents.publishAfterCommit(doctor.getId());
 
         notificationService.notifyAppointmentRescheduled(appointment, oldDate, oldStartTime);
         Appointment saved = appointment;
@@ -405,16 +423,21 @@ public class AppointmentServiceImpl implements AppointmentService {
         return appointmentMapper.toResponse(appointment);
     }
 
-    /** Corre cada minuto: si nadie marcó "atendida"/"no asistió" y ya pasó el fin del horario
-     * MÁS el margen de gracia (app.appointments.no-show-grace-minutes -- una consulta puede
-     * alargarse un poco, o el paciente llegar justo al final), se asume que no se presentó.
-     * Nunca toca citas con la llegada del paciente registrada. {@code changedBy} queda nulo en
-     * el historial -- aquí no hay un usuario autenticado detrás, es el sistema el que actúa. */
+    /** Corre cada minuto. Solo si el hospital lo prendió (Configuración → "Marcar no asistió
+     * automáticamente"; viene apagado): si nadie marcó "atendida"/"no asistió" y ya pasó el fin
+     * del horario MÁS la espera que eligió el hospital, se asume que no se presentó. Apagado,
+     * esas citas esperan en "Cobrar" → "Confirma si llegó". Nunca toca citas con la llegada del
+     * paciente registrada. {@code changedBy} queda nulo en el historial -- aquí no hay un
+     * usuario autenticado detrás, es el sistema el que actúa. */
     // Lo dispara TenantJobs una vez por hospital (cada llamada ya corre con su hospital).
     @Transactional
     public void autoMarkPastDueAsNoShow() {
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(noShowGraceMinutes);
-        List<Appointment> pastDue = appointmentRepository.findPastDueScheduled(cutoff.toLocalDate(), cutoff.toLocalTime());
+        var config = hospitalConfigService.getEntity();
+        List<Appointment> pastDue = List.of();
+        if (Boolean.TRUE.equals(config.getAutoNoShowEnabled())) {
+            LocalDateTime cutoff = LocalDateTime.now().minusMinutes(config.getNoShowGraceMinutes());
+            pastDue = appointmentRepository.findPastDueScheduled(cutoff.toLocalDate(), cutoff.toLocalTime());
+        }
         for (Appointment appointment : pastDue) {
             appointment.setStatus(AppointmentStatus.NO_SHOW);
             appointmentRepository.save(appointment);
@@ -564,6 +587,30 @@ public class AppointmentServiceImpl implements AppointmentService {
 
     @Override
     @Transactional(readOnly = true)
+    public List<AppointmentResponse> listToConfirmArrival() {
+        User actor = requireCurrentUser();
+        Long ownDoctorId = doctorScope.doctorIdOf(actor).orElse(null);
+        LocalDateTime now = LocalDateTime.now();
+        Specification<Appointment> spec = AppointmentSpecifications.pendingArrivalConfirmation(
+                now.toLocalDate(), now.toLocalTime(), now.toLocalDate().minusDays(TO_CONFIRM_DAYS));
+        if (ownDoctorId != null) {
+            spec = spec.and(AppointmentSpecifications.search(ownDoctorId, null, null, null, null, null, null));
+        }
+        List<Long> restriction = receptionistSpecialtyRestriction(actor);
+        if (!restriction.isEmpty()) {
+            spec = spec.and(AppointmentSpecifications.doctorSpecialtyIn(restriction));
+        }
+        return appointmentRepository.findAll(spec, org.springframework.data.domain.PageRequest.of(0, 100,
+                        org.springframework.data.domain.Sort.by("appointmentDate", "startTime")))
+                .map(appointmentMapper::toResponse).getContent();
+    }
+
+    /** Hasta cuántos días atrás se muestran citas sin confirmar (las más viejas ya no se le
+     * piden a recepción; siguen en el historial como "programadas" y se pueden corregir ahí). */
+    private static final int TO_CONFIRM_DAYS = 30;
+
+    @Override
+    @Transactional(readOnly = true)
     public List<AppointmentResponse> lookupForCharge(String q) {
         User actor = requireCurrentUser();
         // Un doctor solo cobra sus propias citas (recepción/admin: null = todas).
@@ -679,7 +726,9 @@ public class AppointmentServiceImpl implements AppointmentService {
     private Appointment createAndPersist(Doctor doctor, Branch branch, Patient patient, LocalDate date,
                                           LocalTime startTime, LocalTime endTime, String reasonForVisit,
                                           User createdByUser, boolean overbook, boolean enforcePatientLimits,
-                                          boolean enforcePhoneLimit) {
+                                          boolean enforcePhoneLimit, UUID holdToken, String holderKey) {
+        // Primera capa: un agendado a la vez por doctor (ver DoctorRepository#lockById).
+        doctorRepository.lockById(doctor.getId());
         List<Appointment> occupants = appointmentRepository.lockOccupantsForSlot(doctor.getId(), date, startTime, endTime);
         boolean liveOccupant = occupants.stream().anyMatch(a -> a.getStatus() != AppointmentStatus.CANCELLED);
         // Con sobrecupo (solo recepción/admin) se permite empalmar sobre una cita viva; un
@@ -688,7 +737,14 @@ public class AppointmentServiceImpl implements AppointmentService {
         if (!occupants.isEmpty() && !(overbook && liveOccupant)) {
             throw new SlotUnavailableException("El horario seleccionado ya no está disponible");
         }
-        boolean overbooked = overbook && liveOccupant;
+        // Alguien más lo está apartando en línea (ver SlotHold). Recepción puede empalmar como
+        // sobrecupo; si no, se le pide elegir otro horario.
+        boolean heldByOther = slotHoldService
+                .findHeldByOthers(doctor.getId(), date, startTime, endTime, holdToken, holderKey).isPresent();
+        if (heldByOther && !overbook) {
+            slotHoldService.requireNotHeldByOthers(doctor.getId(), date, startTime, endTime, holdToken, holderKey);
+        }
+        boolean overbooked = overbook && (liveOccupant || heldByOther);
 
         requireNoPatientOverlap(patient, date, startTime, endTime, -1L);
         if (enforcePatientLimits) {
@@ -736,6 +792,8 @@ public class AppointmentServiceImpl implements AppointmentService {
 
         recordHistory(appointment, null, AppointmentStatus.SCHEDULED, SecurityUtils.getCurrentUserOrNull(),
                 overbooked ? "Cita agendada como sobrecupo" : "Cita agendada");
+        slotHoldService.consume(holdToken, holderKey);
+        availabilityEvents.publishAfterCommit(doctor.getId());
 
         return appointment;
     }
@@ -783,11 +841,22 @@ public class AppointmentServiceImpl implements AppointmentService {
         appointment.setCancelledAt(LocalDateTime.now());
         appointment.setCancelReason(reason);
         appointment.setReleaseEligible(releaseEligible);
-        appointment.setSlotReleased(false);
+        // El horario todavía no llega: vuelve a estar disponible para alguien más en ese momento.
+        boolean autoRelease = autoReleaseOnCancel && LocalDateTime.now().isBefore(appointmentStart);
+        appointment.setSlotReleased(autoRelease);
+        if (autoRelease) {
+            appointment.setReleasedBy(actingUserOrNull);
+            appointment.setReleasedAt(LocalDateTime.now());
+        }
         appointment.setUpdatedBy(actingUserOrNull);
         appointment = appointmentRepository.save(appointment);
 
         recordHistory(appointment, AppointmentStatus.SCHEDULED, AppointmentStatus.CANCELLED, actingUserOrNull, reason);
+        availabilityEvents.publishAfterCommit(appointment.getDoctor().getId());
+        if (autoRelease) {
+            recordHistory(appointment, AppointmentStatus.CANCELLED, AppointmentStatus.CANCELLED, actingUserOrNull,
+                    "Espacio liberado automáticamente al cancelar: vuelve a estar disponible para agendar");
+        }
         // Pago anticipado: reembolsa (>= 1 h de anticipación) o deja por revisar por el administrador.
         paymentService.handleCancellation(appointment);
 

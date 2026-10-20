@@ -38,6 +38,9 @@ public interface PatientRepository extends JpaRepository<Patient, Long> {
 
     List<Patient> findByIsActiveTrue();
 
+    /** Registros de paciente con ese correo en el hospital actual (solicitudes ARCO). */
+    List<Patient> findByEmailIgnoreCase(String email);
+
     /** Pacientes activos de un doctor: con al menos una cita con él o dados de alta por él. */
     @Query("""
             SELECT p FROM Patient p

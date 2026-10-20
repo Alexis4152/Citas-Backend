@@ -31,7 +31,9 @@ public class EmailConfig extends TenantEntity {
     @Column(name = "smtp_username")
     private String smtpUsername;
 
-    @Column(name = "smtp_password")
+    /** Cifrada en BD (ver EncryptedStringConverter). */
+    @Convert(converter = com.hospital.citas.security.EncryptedStringConverter.class)
+    @Column(name = "smtp_password", length = 512)
     private String smtpPassword;
 
     @Column(name = "from_address")

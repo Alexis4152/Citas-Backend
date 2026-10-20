@@ -38,7 +38,7 @@ class BookingTest extends AbstractIntegrationTest {
         req.setFirstName("Invitado");
         // Único por llamada: el agendado de invitado reutiliza al paciente con el mismo nombre+teléfono
         // y limita las citas simultáneas por paciente/teléfono, así que los tests no deben compartirlo.
-        req.setLastName("Prueba-" + java.util.UUID.randomUUID().toString().substring(0, 8));
+        req.setLastName("Prueba-" + randomLetters(8));
         req.setPhone("55" + (10000000 + new java.util.Random().nextInt(89999999)));
         req.setDoctorId(doctor.getId());
         req.setBranchId(branch.getId());

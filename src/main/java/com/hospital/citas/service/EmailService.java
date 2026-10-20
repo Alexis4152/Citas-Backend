@@ -58,5 +58,9 @@ public interface EmailService {
     /** El doctor decide caso por caso si se le envía la receta al paciente por correo (nunca
      * automático -- ver PrescriptionServiceImpl.sendByEmail); no hace nada si el paciente no
      * tiene correo capturado. */
+    /** Correo genérico con la marca del hospital actual. {@code bodyHtml} ya debe venir con el
+     * texto del usuario escapado (ver EmailServiceImpl#escapeHtml). */
+    void sendHtml(String to, String subject, String bodyHtml);
+
     void sendPrescriptionToPatient(Prescription prescription, byte[] prescriptionPdf);
 }

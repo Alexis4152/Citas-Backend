@@ -100,6 +100,67 @@ public class CashCutServiceImpl implements CashCutService {
 
     @Override
     @Transactional(readOnly = true)
+    public com.hospital.citas.report.ReportTable report(Long cutId) {
+        CashCutResponse cut = get(cutId);
+        var fmt = java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+        var b = com.hospital.citas.report.ReportTable.builder("cash-cut", "Corte de caja #" + cut.getId())
+                .subtitle(cut.getUserName() + " · abierto el " + cut.getOpenedAt().format(fmt)
+                        + (cut.getClosedAt() != null ? " · cerrado el " + cut.getClosedAt().format(fmt) : " · sigue abierto"));
+        java.util.function.Function<java.math.BigDecimal, String> m = v -> com.hospital.citas.report.ReportFileWriter.format(
+                v == null ? java.math.BigDecimal.ZERO : v, com.hospital.citas.report.ReportTable.Type.MONEY);
+        b.stat("Fondo inicial", m.apply(cut.getOpeningAmount()))
+                .stat("Efectivo", m.apply(cut.getTotalCash()))
+                .stat("Terminal", m.apply(cut.getTotalCardTerminal()))
+                .stat("OpenPay", m.apply(cut.getTotalOpenpay()))
+                .stat("Total cobrado", m.apply(cut.getTotalCollected()))
+                .stat("Citas cobradas", String.valueOf(cut.getAppointmentsCount() == null ? 0 : cut.getAppointmentsCount()))
+                .stat("Debe haber en caja", m.apply(cut.getExpectedCash()));
+        if ("CLOSED".equals(cut.getStatus())) {
+            b.stat("Contado", m.apply(cut.getCountedCash()));
+            java.math.BigDecimal diff = cut.getDifference() == null ? java.math.BigDecimal.ZERO : cut.getDifference();
+            b.stat(diff.signum() == 0 ? "Caja cuadrada" : diff.signum() < 0 ? "Faltante" : "Sobrante", m.apply(diff.abs()));
+        }
+        var MONEY = com.hospital.citas.report.ReportTable.Type.MONEY;
+        var TEXT = com.hospital.citas.report.ReportTable.Type.TEXT;
+        b.col("at", "Hora del cobro", com.hospital.citas.report.ReportTable.Type.DATETIME, 1.1f)
+                .col("folio", "Folio cita", TEXT, 0.7f)
+                .col("appt", "Cita", TEXT, 1.1f)
+                .col("patient", "Paciente", TEXT, 1.7f)
+                .col("doctor", "Doctor", TEXT, 1.6f)
+                .col("method", "Método", TEXT, 1.1f)
+                .col("received", "Recibido", MONEY, 0.85f)
+                .col("change", "Cambio", MONEY, 0.8f)
+                .col("reference", "Referencia", TEXT, 1f)
+                .col("by", "Cobró", TEXT, 1.2f)
+                .col("amount", "Monto", MONEY, 0.9f);
+        java.math.BigDecimal total = java.math.BigDecimal.ZERO;
+        int count = 0;
+        var dmy = java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy");
+        for (var p : cut.getPayments()) {
+            boolean refunded = "REFUNDED".equals(p.getStatus());
+            if (!refunded) {
+                total = total.add(p.getAmount());
+                count++;
+            }
+            b.row(p.getCreatedAt(), "#" + String.format("%06d", p.getAppointmentId()),
+                    (p.getAppointmentDate() == null ? "" : p.getAppointmentDate().format(dmy))
+                            + (p.getAppointmentTime() == null ? "" : " " + p.getAppointmentTime().toString().substring(0, 5)),
+                    p.getPatientName(), p.getDoctorName(),
+                    com.hospital.citas.report.ReportCatalog.methodLabel(PaymentMethod.valueOf(p.getMethod())) + (refunded ? " (reembolsado)" : ""),
+                    p.getCashReceived(), p.getChangeGiven(),
+                    p.getReference() != null ? p.getReference() : p.getAuthorizationCode(),
+                    p.getReceivedByName(), refunded ? java.math.BigDecimal.ZERO : p.getAmount());
+        }
+        b.totals("Total", null, null, count + " cobros", null, null, null, null, null, null, total);
+        if (cut.getOpeningNotes() != null || cut.getClosingNotes() != null) {
+            b.note((cut.getOpeningNotes() != null ? "Notas de apertura: " + cut.getOpeningNotes() + ". " : "")
+                    + (cut.getClosingNotes() != null ? "Notas de cierre: " + cut.getClosingNotes() + "." : ""));
+        }
+        return b.build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public PageResponse<CashCutResponse> list(Pageable pageable) {
         User actor = requireCurrentUser();
         Page<CashCut> page = actor.getRole().getName() == RoleName.ADMIN

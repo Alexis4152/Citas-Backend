@@ -85,8 +85,10 @@ public final class AppointmentSpecifications {
     }
 
     /** Cola de cobro sin texto: lo que recepción tiene por cobrar ahora -- citas ya atendidas sin
-     * pagar (de cualquier fecha) y citas programadas de HOY sin pagar (el paciente puede estar
-     * en el mostrador antes de pasar con el doctor). */
+     * pagar (de cualquier fecha) y citas programadas de HOY sin pagar cuyo paciente YA LLEGÓ
+     * (puede pagar en el mostrador antes de pasar con el doctor). Las que no han llegado no
+     * entran: se confirman aparte (ver {@link #pendingArrivalConfirmation}); con el QR o el
+     * nombre se siguen encontrando para cobrarlas. */
     public static Specification<Appointment> chargeQueue(LocalDate today) {
         return (root, query, cb) -> cb.and(
                 root.get("paymentStatus").in(com.hospital.citas.enums.AppointmentPaymentStatus.UNPAID,
@@ -94,7 +96,21 @@ public final class AppointmentSpecifications {
                 cb.or(
                         cb.equal(root.get("status"), AppointmentStatus.COMPLETED),
                         cb.and(cb.equal(root.get("status"), AppointmentStatus.SCHEDULED),
-                                cb.equal(root.get("appointmentDate"), today))));
+                                cb.equal(root.get("appointmentDate"), today),
+                                cb.isNotNull(root.get("arrivedAt")))));
+    }
+
+    /** Programadas cuya hora de INICIO ya pasó (desde {@code since}) y sin llegada registrada:
+     * nadie confirmó si el paciente vino. */
+    public static Specification<Appointment> pendingArrivalConfirmation(LocalDate today, java.time.LocalTime now, LocalDate since) {
+        return (root, query, cb) -> cb.and(
+                cb.equal(root.get("status"), AppointmentStatus.SCHEDULED),
+                cb.isNull(root.get("arrivedAt")),
+                cb.greaterThanOrEqualTo(root.get("appointmentDate"), since),
+                cb.or(
+                        cb.lessThan(root.get("appointmentDate"), today),
+                        cb.and(cb.equal(root.get("appointmentDate"), today),
+                                cb.lessThanOrEqualTo(root.get("startTime"), now))));
     }
 
     /** Restringe a doctores de alguna de estas especialidades -- usado para acotar lo que ve

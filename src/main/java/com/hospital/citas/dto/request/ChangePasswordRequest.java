@@ -13,7 +13,12 @@ public class ChangePasswordRequest {
     private String currentPassword;
 
     @NotBlank(message = "La nueva contraseña es obligatoria")
-    @Size(min = 8, message = "La contraseña debe tener al menos 8 caracteres")
+    @Size(min = 8, max = 72, message = "La contraseña debe tener entre 8 y 72 caracteres")
     @Pattern(regexp = ValidationPatterns.PASSWORD_REGEXP, message = ValidationPatterns.PASSWORD_MESSAGE)
     private String newPassword;
+
+    @jakarta.validation.constraints.AssertTrue(message = "La nueva contraseña debe ser distinta de la actual")
+    public boolean isDifferentFromCurrent() {
+        return currentPassword == null || newPassword == null || !currentPassword.equals(newPassword);
+    }
 }

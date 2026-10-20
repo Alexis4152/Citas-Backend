@@ -25,6 +25,7 @@ public class TenantJobs {
 
     private final HospitalRepository hospitalRepository;
     private final AppointmentServiceImpl appointmentService;
+    private final com.hospital.citas.service.SlotHoldService slotHoldService;
 
     /** Cada minuto: cierra como "no asistió" / "atendida" las citas que nadie marcó a tiempo. */
     @Scheduled(fixedRate = 60_000)
@@ -36,6 +37,12 @@ public class TenantJobs {
     @Scheduled(fixedRate = 300_000)
     public void twoHourReminders() {
         forEachHospital("recordatorios de 2 horas", h -> appointmentService.sendTwoHourReminders());
+    }
+
+    /** Cada minuto: borra los apartados temporales de horario que ya vencieron (ver SlotHold). */
+    @Scheduled(fixedRate = 60_000)
+    public void purgeExpiredSlotHolds() {
+        forEachHospital("limpiar apartados vencidos", h -> slotHoldService.purgeExpired());
     }
 
     private void forEachHospital(String jobName, Consumer<Hospital> job) {

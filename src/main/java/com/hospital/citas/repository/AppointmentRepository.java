@@ -75,6 +75,19 @@ public interface AppointmentRepository extends JpaRepository<Appointment, Long>,
                                             @Param("startTime") LocalTime startTime,
                                             @Param("endTime") LocalTime endTime);
 
+    /** Igual que {@link #lockOccupantsForSlot} pero sin bloquear: para apartar un horario solo
+     * hace falta saber si ya está ocupado (el bloqueo real ocurre al confirmar la cita). */
+    @Query("""
+            SELECT COUNT(a) FROM Appointment a
+            WHERE a.doctor.id = :doctorId AND a.appointmentDate = :date
+              AND a.startTime < :endTime AND a.endTime > :startTime
+              AND (a.status <> com.hospital.citas.enums.AppointmentStatus.CANCELLED OR a.slotReleased = false)
+            """)
+    long countOccupantsForSlot(@Param("doctorId") Long doctorId,
+                               @Param("date") LocalDate date,
+                               @Param("startTime") LocalTime startTime,
+                               @Param("endTime") LocalTime endTime);
+
     @Query("""
             SELECT a FROM Appointment a
             WHERE a.doctor.id = :doctorId AND a.appointmentDate BETWEEN :from AND :to
@@ -265,4 +278,8 @@ public interface AppointmentRepository extends JpaRepository<Appointment, Long>,
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Appointment a SET a.patient = :target, a.version = a.version + 1 WHERE a.patient = :source")
     int reassignPatient(@Param("source") Patient source, @Param("target") Patient target);
+
+    /** Primera cita de cada paciente en el hospital (para contar pacientes nuevos en un reporte). */
+    @Query("SELECT a.patient.id, MIN(a.appointmentDate) FROM Appointment a WHERE a.patient.id IN :patientIds GROUP BY a.patient.id")
+    List<Object[]> firstAppointmentDates(@Param("patientIds") java.util.Collection<Long> patientIds);
 }

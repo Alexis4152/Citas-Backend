@@ -30,4 +30,9 @@ public class MedicalInfoRequest {
      * {@code bloodType}) solo cuando {@code bloodType == OTHER}. */
     @Size(max = 100, message = "El detalle del tipo de sangre no puede superar 100 caracteres")
     private String bloodTypeOther;
+
+    @jakarta.validation.constraints.AssertTrue(message = "Si el tipo de sangre es 'Otro', especifica cuál")
+    public boolean isOtherBloodTypeDetailed() {
+        return bloodType != com.hospital.citas.enums.BloodType.OTHER || (bloodTypeOther != null && !bloodTypeOther.isBlank());
+    }
 }

@@ -22,6 +22,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -58,13 +59,32 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .httpBasic(AbstractHttpConfigurer::disable)
+                .formLogin(AbstractHttpConfigurer::disable)
+                // Headers de seguridad (patrón de nexora-hotel). La API solo devuelve JSON e
+                // imágenes: con CSP "default-src 'none'" ningún archivo servido puede ejecutar
+                // scripts aunque alguien lograra subir uno disfrazado de imagen. no-referrer evita
+                // que la URL (que puede traer el token de una cita) viaje a sitios externos.
+                .headers(h -> h
+                        .frameOptions(f -> f.deny())
+                        .contentTypeOptions(c -> { })
+                        .referrerPolicy(r -> r.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
+                        .contentSecurityPolicy(c -> c.policyDirectives("default-src 'none'; frame-ancestors 'none'"))
+                        .httpStrictTransportSecurity(t -> t.includeSubDomains(true).maxAgeInSeconds(31536000))
+                        .permissionsPolicy(p -> p.policy("camera=(), microphone=(), geolocation=(), payment=()")))
                 .exceptionHandling(e -> e
                         .authenticationEntryPoint(restAuthenticationEntryPoint)
                         .accessDeniedHandler(restAccessDeniedHandler))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/auth/change-password", "/api/auth/logout").authenticated()
+                        // Avisos en vivo (SSE): el cierre de la conexión vuelve a pasar por la cadena
+                        // como despacho ASYNC; esa petición ya se autorizó al abrirse.
+                        .dispatcherTypeMatchers(jakarta.servlet.DispatcherType.ASYNC).permitAll()
+                        .requestMatchers("/api/auth/change-password", "/api/auth/logout", "/api/auth/permissions").authenticated()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/**").permitAll()
+                        // Apartado temporal de horario y formulario ARCO: públicos (sin sesión).
+                        .requestMatchers(HttpMethod.POST, "/api/public/slot-holds", "/api/public/arco-requests").permitAll()
+                        .requestMatchers(HttpMethod.DELETE, "/api/public/slot-holds/*").permitAll()
                         .requestMatchers("/uploads/**").permitAll()
                         .requestMatchers("/api/appointments/guest").permitAll()
                         .requestMatchers("/api/appointments/guest-receipt/**").permitAll()
@@ -88,6 +108,8 @@ public class SecurityConfig {
                         ).hasAnyRole("RECEPTIONIST", "ADMIN", "DOCTOR")
                         .requestMatchers("/api/reception/**").hasAnyRole("RECEPTIONIST", "ADMIN")
                         .requestMatchers("/api/doctor/**").hasAnyRole("DOCTOR", "ADMIN")
+                        // Reportes: personal del hospital; qué ve cada quien lo deciden sus permisos.
+                        .requestMatchers("/api/reports/**").hasAnyRole("ADMIN", "RECEPTIONIST", "DOCTOR")
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/superadmin/**").hasRole("SUPER_ADMIN")
                         .anyRequest().authenticated()
@@ -110,10 +132,15 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration cfg = new CorsConfiguration();
-        cfg.setAllowedOrigins(List.of(allowedOrigins.split(",")));
+        cfg.setAllowedOrigins(java.util.Arrays.stream(allowedOrigins.split(",")).map(String::trim)
+                .filter(o -> !o.isEmpty()).toList());
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
-        cfg.setAllowedHeaders(List.of("*"));
+        // Lista cerrada en vez de "*": con credenciales activas, solo los headers que la app usa.
+        cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Hospital", "X-Requested-With",
+                RequestIdFilter.HEADER));
+        cfg.setExposedHeaders(List.of("Content-Disposition", "Retry-After", RequestIdFilter.HEADER));
         cfg.setAllowCredentials(true);
+        cfg.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", cfg);
         return source;

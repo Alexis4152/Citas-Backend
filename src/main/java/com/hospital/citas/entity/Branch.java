@@ -25,6 +25,15 @@ public class Branch extends AuditableEntity {
     @Column(length = 100)
     private String city;
 
+    @Column(length = 120)
+    private String neighborhood;
+
+    @Column(length = 80)
+    private String state;
+
+    @Column(name = "postal_code", length = 5)
+    private String postalCode;
+
     @Column(length = 30)
     private String phone;
 

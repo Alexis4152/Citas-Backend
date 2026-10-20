@@ -60,6 +60,18 @@ public class HospitalConfigServiceImpl implements HospitalConfigService {
         config.setDescription(request.getDescription());
         config.setContactPhone(request.getContactPhone());
         config.setContactEmail(request.getContactEmail());
+        config.setLegalName(blankToNull(request.getLegalName()));
+        config.setRfc(upperOrNull(request.getRfc()));
+        config.setAddressLine(blankToNull(request.getAddressLine()));
+        config.setNeighborhood(blankToNull(request.getNeighborhood()));
+        config.setCity(blankToNull(request.getCity()));
+        config.setState(blankToNull(request.getState()));
+        config.setPostalCode(blankToNull(request.getPostalCode()));
+        config.setWebsite(blankToNull(request.getWebsite()));
+        config.setWhatsapp(blankToNull(request.getWhatsapp()));
+        config.setOpeningHours(blankToNull(request.getOpeningHours()));
+        if (request.getAutoNoShowEnabled() != null) config.setAutoNoShowEnabled(request.getAutoNoShowEnabled());
+        if (request.getNoShowGraceMinutes() != null) config.setNoShowGraceMinutes(request.getNoShowGraceMinutes());
         config.setUpdatedAt(LocalDateTime.now());
         config.setUpdatedBy(SecurityUtils.getCurrentUserOrNull());
         HospitalConfig saved = hospitalConfigRepository.save(config);
@@ -96,5 +108,13 @@ public class HospitalConfigServiceImpl implements HospitalConfigService {
                         .build()));
         cache.put(hospitalId, loaded);
         return loaded;
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
+    }
+
+    private static String upperOrNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim().toUpperCase(java.util.Locale.ROOT);
     }
 }
