@@ -11,6 +11,7 @@ import com.hospital.citas.dto.request.RegisterRequest;
 import com.hospital.citas.dto.request.ResetPasswordRequest;
 import com.hospital.citas.dto.response.LoginResponse;
 import com.hospital.citas.entity.PasswordResetToken;
+import com.hospital.citas.entity.Patient;
 import com.hospital.citas.entity.Role;
 import com.hospital.citas.entity.User;
 import com.hospital.citas.enums.RoleName;
@@ -57,6 +58,10 @@ public class AuthServiceImpl implements AuthService {
     private final EmailService emailService;
 
     private final TenantLinks tenantLinks;
+    private final com.hospital.citas.repository.PatientRepository patientRepository;
+    private final com.hospital.citas.repository.EmailTokenRepository emailTokenRepository;
+    private final com.hospital.citas.service.ArcoEmailService arcoEmailService;
+    private final com.hospital.citas.service.ConsentService consentService;
 
     @Override
     @Transactional
@@ -70,6 +75,15 @@ public class AuthServiceImpl implements AuthService {
         Role patientRole = roleRepository.findByName(RoleName.PATIENT)
                 .orElseThrow(() -> new IllegalStateException("Rol PATIENT no configurado"));
 
+        // Un correo = un paciente por hospital. Si ya hay un expediente con este correo (alguien
+        // que agendó como invitado), la cuenta se crea apagada y se manda un enlace al correo:
+        // solo quien de verdad controla ese correo puede ligar la cuenta a ese expediente.
+        var existingPatient = patientRepository.findFirstByEmailIgnoreCaseAndIsActiveTrue(request.getEmail());
+        if (existingPatient.isPresent() && existingPatient.get().getUser() != null) {
+            throw new DuplicateResourceException("Ya existe una cuenta con ese correo");
+        }
+        boolean needsActivation = existingPatient.isPresent();
+
         User user = User.builder()
                 .email(request.getEmail())
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
@@ -78,14 +92,73 @@ public class AuthServiceImpl implements AuthService {
                 .phone(request.getPhone())
                 .role(patientRole)
                 .build();
+        user.setIsActive(!needsActivation);
         user = userRepository.save(user);
 
+        if (needsActivation) {
+            String token = com.hospital.citas.util.SecureTokens.newToken();
+            emailTokenRepository.save(com.hospital.citas.entity.EmailToken.builder()
+                    .purpose(com.hospital.citas.entity.EmailToken.ACCOUNT_ACTIVATION)
+                    .tokenHash(com.hospital.citas.util.SecureTokens.hash(token))
+                    .user(user).patient(existingPatient.get())
+                    .expiresAt(LocalDateTime.now().plusHours(48))
+                    .build());
+            consentService.recordAcceptance(existingPatient.get(), user, "REGISTER");
+            String to = user.getEmail();
+            String name = user.getFirstName();
+            afterCommit(() -> arcoEmailService.sendAccountActivation(to, name, token));
+            return LoginResponse.builder().pendingActivation(true).build();
+        }
+
         // Todo paciente con cuenta propia obtiene automáticamente su fila en `patients`.
-        patientService.findOrCreatePatientForUser(user);
+        Patient ownPatient = patientService.findOrCreatePatientForUser(user);
+        consentService.recordAcceptance(ownPatient, user, "REGISTER");
 
         String token = jwtTokenProvider.generateToken(user);
         return LoginResponse.builder().token(token).user(userMapper.toResponse(user))
                 .mustChangePassword(user.getMustChangePassword()).build();
+    }
+
+    /** Activa la cuenta creada con un correo que ya tenía expediente y la liga a ese expediente. */
+    @Override
+    @Transactional
+    public LoginResponse activate(String token) {
+        var record = emailTokenRepository.findByTokenHashAndPurpose(com.hospital.citas.util.SecureTokens.hash(token),
+                        com.hospital.citas.entity.EmailToken.ACCOUNT_ACTIVATION)
+                .orElseThrow(() -> new BusinessException("El enlace no es válido"));
+        if (record.getUsedAt() != null) throw new BusinessException("Este enlace ya se usó: inicia sesión con tu correo y contraseña");
+        if (record.getExpiresAt().isBefore(LocalDateTime.now())) throw new BusinessException("El enlace venció: vuelve a registrarte para recibir uno nuevo");
+        User user = record.getUser();
+        Patient patient = record.getPatient();
+        if (patient != null && patient.getUser() != null && !patient.getUser().getId().equals(user.getId())) {
+            throw new BusinessException("Ese expediente ya está ligado a otra cuenta; acude a recepción");
+        }
+        user.setIsActive(true);
+        userRepository.save(user);
+        if (patient != null && Boolean.TRUE.equals(patient.getIsActive())) {
+            patient.setUser(user);
+            patientRepository.save(patient);
+        } else {
+            patientService.findOrCreatePatientForUser(user);
+        }
+        record.setUsedAt(LocalDateTime.now());
+        emailTokenRepository.save(record);
+        return LoginResponse.builder().token(jwtTokenProvider.generateToken(user)).user(userMapper.toResponse(user))
+                .mustChangePassword(user.getMustChangePassword()).build();
+    }
+
+    private static void afterCommit(Runnable action) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            action.run();
+                        }
+                    });
+        } else {
+            action.run();
+        }
     }
 
     // Fuerza bruta en login (hallazgo "Alto" de la auditoría): sin esto, una cuenta acepta

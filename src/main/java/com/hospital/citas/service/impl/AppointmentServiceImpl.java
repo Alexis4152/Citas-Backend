@@ -82,6 +82,7 @@ public class AppointmentServiceImpl implements AppointmentService {
     private final com.hospital.citas.service.AvailabilityEvents availabilityEvents;
     private final com.hospital.citas.security.PermissionService permissionService;
     private final com.hospital.citas.service.HospitalConfigService hospitalConfigService;
+    private final com.hospital.citas.service.ConsentService consentService;
 
     @Value("${app.appointments.max-active-per-patient:5}")
     private int maxActivePerPatient;
@@ -110,6 +111,8 @@ public class AppointmentServiceImpl implements AppointmentService {
         // Invitado sin cuenta: modifiedBy nulo -- lo reportó él mismo, sin identidad
         // verificada (ver Patient#medicalInfoUpdatedBy).
         patientService.applyMedicalInfo(patient, request.getMedicalInfo(), null);
+        // Constancia de que aceptó el aviso de privacidad y el tratamiento de sus datos de salud.
+        consentService.recordAcceptance(patient, null, "WEB_BOOKING");
 
         Appointment appointment = createAndPersist(doctor, branch, patient, request.getAppointmentDate(),
                 request.getStartTime(), endTime, request.getReasonForVisit(), null, false, true, true,
@@ -468,8 +471,12 @@ public class AppointmentServiceImpl implements AppointmentService {
             appointment.setReminder2hSentAt(LocalDateTime.now());
             appointmentRepository.save(appointment);
         }
-        if (!due.isEmpty()) {
-            afterCommit(() -> due.forEach(emailService::sendAppointmentReminder));
+        // Quien se opuso a los recordatorios (preferencias de privacidad) no los recibe.
+        List<Appointment> toSend = due.stream()
+                .filter(a -> a.getPatient() == null || !Boolean.FALSE.equals(a.getPatient().getNotifyReminders()))
+                .toList();
+        if (!toSend.isEmpty()) {
+            afterCommit(() -> toSend.forEach(emailService::sendAppointmentReminder));
         }
     }
 
@@ -821,6 +828,13 @@ public class AppointmentServiceImpl implements AppointmentService {
 
     private boolean startsWithinTwoHours(LocalDate date, LocalTime start) {
         return !LocalDateTime.of(date, start).isAfter(LocalDateTime.now().plusHours(2));
+    }
+
+    /** Cancelación ARCO: las citas por venir del titular se cancelan (y se liberan) antes de
+     * bloquear sus datos. Se avisa al doctor y a recepción como cualquier cancelación. */
+    @Transactional
+    public void cancelForPrivacyRequest(Appointment appointment, User actor, String reason) {
+        cancelInternal(appointment, reason, actor, false);
     }
 
     /** {@code patientInitiated}: paciente (con cuenta o por token de invitado) -- una cita que

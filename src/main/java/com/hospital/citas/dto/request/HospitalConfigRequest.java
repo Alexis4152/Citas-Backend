@@ -64,4 +64,22 @@ public class HospitalConfigRequest {
     @jakarta.validation.constraints.Min(value = 5, message = "La espera antes de marcar \"no asistió\" debe ser de al menos 5 minutos")
     @jakarta.validation.constraints.Max(value = 240, message = "La espera antes de marcar \"no asistió\" no puede superar 240 minutos")
     private Integer noShowGraceMinutes;
+
+    @jakarta.validation.constraints.Size(max = 150, message = "El nombre del responsable de datos personales no puede superar 150 caracteres")
+    private String privacyContactName;
+
+    @jakarta.validation.constraints.Email(message = "El correo del responsable de datos personales no es válido")
+    @jakarta.validation.constraints.Size(max = 150)
+    private String privacyContactEmail;
+
+    @jakarta.validation.constraints.Min(value = 5, message = "El expediente clínico se conserva al menos 5 años (NOM-004)")
+    @jakarta.validation.constraints.Max(value = 30, message = "El plazo de conservación no puede pasar de 30 años")
+    private Integer clinicalRetentionYears;
+
+    @jakarta.validation.constraints.Min(value = 5, message = "Los datos de pagos se conservan al menos 5 años")
+    @jakarta.validation.constraints.Max(value = 30, message = "El plazo de conservación no puede pasar de 30 años")
+    private Integer fiscalRetentionYears;
+
+    /** true = publicar una nueva versión del aviso de privacidad con los datos guardados. */
+    private Boolean publishPrivacyNotice;
 }

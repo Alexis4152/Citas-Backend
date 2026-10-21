@@ -17,13 +17,17 @@ public interface ArcoRequestRepository extends JpaRepository<ArcoRequest, Long> 
             SELECT a FROM ArcoRequest a
             LEFT JOIN FETCH a.resolvedBy
             WHERE (:status IS NULL OR a.status = :status)
-            ORDER BY CASE WHEN a.status = com.hospital.citas.enums.ArcoRequestStatus.PENDING THEN 0 ELSE 1 END,
+            ORDER BY CASE WHEN a.status IN (com.hospital.citas.enums.ArcoRequestStatus.PENDING,
+                                            com.hospital.citas.enums.ArcoRequestStatus.APPROVED,
+                                            com.hospital.citas.enums.ArcoRequestStatus.INFO_REQUESTED) THEN 0 ELSE 1 END,
                      CASE WHEN a.status = com.hospital.citas.enums.ArcoRequestStatus.PENDING THEN a.dueDate END ASC,
                      a.createdAt DESC
             """)
     List<ArcoRequest> search(@Param("status") ArcoRequestStatus status);
 
     long countByStatus(ArcoRequestStatus status);
+
+    java.util.Optional<ArcoRequest> findByTrackingTokenHash(String trackingTokenHash);
 
     List<ArcoRequest> findByRequesterUser_IdOrderByCreatedAtDesc(Long userId);
 

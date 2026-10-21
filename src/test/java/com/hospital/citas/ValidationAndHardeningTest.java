@@ -30,6 +30,7 @@ class ValidationAndHardeningTest extends AbstractIntegrationTest {
     void namesWithDigitsOrSymbolsAreRejected() {
         Map<String, Object> register = new HashMap<>(Map.of("email", "nuevo-" + UUID.randomUUID() + "@correo.com",
                 "password", "Paciente123!", "firstName", "Ana<b>", "lastName", "López"));
+        register.put("acceptPrivacyNotice", true);
         ResponseEntity<String> r = post("/api/auth/register", register, null);
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(r.getBody()).contains("solo puede tener letras");
@@ -92,6 +93,7 @@ class ValidationAndHardeningTest extends AbstractIntegrationTest {
         body.put("appointmentDate", LocalDate.now().minusDays(1).toString());
         body.put("startTime", "10:00");
         body.put("medicalInfo", Map.of("allergies", "Ninguna", "bloodType", "OTHER"));
+        body.put("acceptPrivacyNotice", true);
         ResponseEntity<String> r = post("/api/appointments/guest", body, null);
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(r.getBody()).contains("no puede ser pasada").contains("especifica cuál");

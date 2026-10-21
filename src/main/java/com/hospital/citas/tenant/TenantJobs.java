@@ -26,6 +26,7 @@ public class TenantJobs {
     private final HospitalRepository hospitalRepository;
     private final AppointmentServiceImpl appointmentService;
     private final com.hospital.citas.service.SlotHoldService slotHoldService;
+    private final com.hospital.citas.service.ArcoRequestService arcoRequestService;
 
     /** Cada minuto: cierra como "no asistió" / "atendida" las citas que nadie marcó a tiempo. */
     @Scheduled(fixedRate = 60_000)
@@ -43,6 +44,12 @@ public class TenantJobs {
     @Scheduled(fixedRate = 60_000)
     public void purgeExpiredSlotHolds() {
         forEachHospital("limpiar apartados vencidos", h -> slotHoldService.purgeExpired());
+    }
+
+    /** Cada hora: plazos ARCO vencidos, solicitudes sin confirmar, identificaciones viejas y resguardos vencidos. */
+    @Scheduled(fixedRate = 3_600_000, initialDelay = 120_000)
+    public void privacyMaintenance() {
+        forEachHospital("mantenimiento de privacidad", h -> arcoRequestService.maintenance());
     }
 
     private void forEachHospital(String jobName, Consumer<Hospital> job) {

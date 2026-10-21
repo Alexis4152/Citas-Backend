@@ -95,4 +95,31 @@ public class CredentialEncryptionService {
             return null;
         }
     }
+
+    /** Archivos (identificaciones, reportes, constancias): IV + texto cifrado, en binario. */
+    public byte[] encryptBytes(byte[] plain) {
+        try {
+            byte[] iv = new byte[IV_BYTES];
+            random.nextBytes(iv);
+            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+            cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(TAG_BITS, iv));
+            byte[] ciphertext = cipher.doFinal(plain);
+            byte[] combined = new byte[iv.length + ciphertext.length];
+            System.arraycopy(iv, 0, combined, 0, iv.length);
+            System.arraycopy(ciphertext, 0, combined, iv.length, ciphertext.length);
+            return combined;
+        } catch (Exception e) {
+            throw new IllegalStateException("No se pudo cifrar el archivo", e);
+        }
+    }
+
+    public byte[] decryptBytes(byte[] combined) {
+        try {
+            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(TAG_BITS, combined, 0, IV_BYTES));
+            return cipher.doFinal(combined, IV_BYTES, combined.length - IV_BYTES);
+        } catch (Exception e) {
+            throw new IllegalStateException("No se pudo descifrar el archivo (¿cambió APP_ENCRYPTION_KEY?)", e);
+        }
+    }
 }

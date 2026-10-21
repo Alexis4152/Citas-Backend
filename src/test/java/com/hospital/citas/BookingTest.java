@@ -35,6 +35,7 @@ class BookingTest extends AbstractIntegrationTest {
 
     private GuestAppointmentRequest guestRequest(Doctor doctor, Branch branch, LocalDate date, LocalTime time) {
         GuestAppointmentRequest req = new GuestAppointmentRequest();
+        req.setAcceptPrivacyNotice(true);
         req.setFirstName("Invitado");
         // Único por llamada: el agendado de invitado reutiliza al paciente con el mismo nombre+teléfono
         // y limita las citas simultáneas por paciente/teléfono, así que los tests no deben compartirlo.

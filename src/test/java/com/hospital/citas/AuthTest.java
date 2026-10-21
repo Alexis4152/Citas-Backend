@@ -19,6 +19,7 @@ class AuthTest extends AbstractIntegrationTest {
     @Test
     void registerCreatesUserRoleAlwaysPatient() {
         RegisterRequest req = new RegisterRequest();
+        req.setAcceptPrivacyNotice(true);
         req.setEmail("nuevo-" + System.nanoTime() + "@test.com");
         req.setPassword("Password123");
         req.setFirstName("Nuevo");
@@ -42,6 +43,7 @@ class AuthTest extends AbstractIntegrationTest {
     @Test
     void registerRejectsDuplicateEmail() {
         RegisterRequest req = new RegisterRequest();
+        req.setAcceptPrivacyNotice(true);
         req.setEmail("duplicado-" + System.nanoTime() + "@test.com");
         req.setPassword("Password123");
         req.setFirstName("A");

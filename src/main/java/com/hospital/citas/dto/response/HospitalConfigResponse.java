@@ -28,4 +28,10 @@ public class HospitalConfigResponse {
     private String openingHours;
     private Boolean autoNoShowEnabled;
     private Integer noShowGraceMinutes;
+    private String privacyContactName;
+    private String privacyContactEmail;
+    private Integer privacyNoticeVersion;
+    private java.time.LocalDateTime privacyNoticeUpdatedAt;
+    private Integer clinicalRetentionYears;
+    private Integer fiscalRetentionYears;
 }

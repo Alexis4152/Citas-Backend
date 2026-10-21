@@ -34,6 +34,17 @@ public class ArcoRequestCreate {
     @Size(max = 2000, message = "El detalle no puede tener más de 2000 caracteres")
     private String details;
 
+    /** Actúa como representante (padre, madre, tutor o apoderado) del titular. */
+    private Boolean representative;
+
+    @Size(max = 150, message = "El nombre del representante no puede tener más de 150 caracteres")
+    private String representativeName;
+
+    /** Con sesión: contraseña actual para confirmar la identidad en Acceso, Cancelación,
+     * Rectificación y Revocación. */
+    @Size(max = 200)
+    private String password;
+
     /** Aceptación del aviso de privacidad: obligatoria para mandar la solicitud. */
     private boolean acceptPrivacyNotice;
 
@@ -42,13 +53,18 @@ public class ArcoRequestCreate {
         return acceptPrivacyNotice;
     }
 
-    /** Rectificación y Oposición necesitan saber qué dato corregir u a qué uso se opone. */
-    @jakarta.validation.constraints.AssertTrue(message = "Para rectificar u oponerte, cuéntanos qué dato o qué uso (mínimo 10 caracteres)")
+    /** Rectificación, Oposición y Limitación necesitan saber qué dato corregir o a qué uso se refiere. */
+    @jakarta.validation.constraints.AssertTrue(message = "Para rectificar, oponerte o limitar, cuéntanos qué dato o qué uso (mínimo 10 caracteres)")
     public boolean isDetailsPresentWhenRequired() {
-        if (type != ArcoRequestType.RECTIFICATION && type != ArcoRequestType.OPPOSITION) {
+        if (type != ArcoRequestType.RECTIFICATION && type != ArcoRequestType.OPPOSITION && type != ArcoRequestType.LIMITATION) {
             return true;
         }
         return details != null && details.trim().length() >= 10;
+    }
+
+    @jakarta.validation.constraints.AssertTrue(message = "Si actúas como representante, escribe tu nombre completo")
+    public boolean isRepresentativeNamed() {
+        return !Boolean.TRUE.equals(representative) || (representativeName != null && representativeName.trim().length() >= 5);
     }
 
     public void requireIdentityFields() {

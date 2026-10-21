@@ -94,4 +94,39 @@ public class Patient extends AuditableEntity {
 
     @Column(name = "medical_info_updated_at")
     private LocalDateTime medicalInfoUpdatedAt;
+
+    /** Correo que tenía antes de la regla "un correo = un paciente por hospital" (duplicado
+     * que recepción debe revisar o fusionar). Solo informativo: no se usa para buscar. */
+    @Column(name = "email_moved", length = 150)
+    private String emailMoved;
+
+    /** ACTIVE · BLOCKED (Cancelación ARCO: identidad en resguardo mientras corre el plazo legal)
+     * · ANONYMIZED (venció el plazo: ya no hay forma de identificarlo). */
+    @Column(name = "privacy_status", nullable = false, length = 15)
+    @lombok.Builder.Default
+    private String privacyStatus = "ACTIVE";
+
+    @Column(name = "blocked_at")
+    private LocalDateTime blockedAt;
+
+    /** Hasta cuándo se conserva lo bloqueado (expediente clínico y datos fiscales). */
+    @Column(name = "retain_until")
+    private java.time.LocalDate retainUntil;
+
+    @Column(name = "anonymized_at")
+    private LocalDateTime anonymizedAt;
+
+    /** Preferencias (derecho de Oposición/Limitación): recordatorios por correo de sus citas. */
+    @Column(name = "notify_reminders", nullable = false)
+    @lombok.Builder.Default
+    private Boolean notifyReminders = true;
+
+    /** Novedades y encuestas del hospital (finalidad secundaria: apagada si no la acepta). */
+    @Column(name = "notify_news", nullable = false)
+    @lombok.Builder.Default
+    private Boolean notifyNews = false;
+
+    public boolean isPrivacyActive() {
+        return privacyStatus == null || "ACTIVE".equals(privacyStatus);
+    }
 }

@@ -14,6 +14,10 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
 
     List<Payment> findByAppointment_IdOrderByCreatedAtDesc(Long appointmentId);
 
+    /** Pagos de todas las citas de un paciente (reporte de Acceso y plazo fiscal de conservación). */
+    @Query("SELECT p FROM Payment p JOIN FETCH p.appointment a WHERE a.patient.id = :patientId ORDER BY p.createdAt DESC")
+    List<Payment> findByPatientId(@Param("patientId") Long patientId);
+
     Optional<Payment> findByOpenpayTransactionId(String openpayTransactionId);
 
     /** Hospital dueño de una transacción de OpenPay (el webhook no lo dice). Usar en ROOT. */

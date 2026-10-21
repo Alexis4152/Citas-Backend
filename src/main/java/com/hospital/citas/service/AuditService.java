@@ -47,6 +47,12 @@ public class AuditService {
         ACTION_LABELS.put("PERMISSIONS_USER", "Cambió los permisos de una persona");
         ACTION_LABELS.put("ARCO_EXPORT", "Descargó datos personales (ARCO)");
         ACTION_LABELS.put("ARCO_RESOLVE", "Resolvió una solicitud ARCO");
+        ACTION_LABELS.put("ARCO_DOCUMENT_VIEW", "Abrió un documento de una solicitud ARCO");
+        ACTION_LABELS.put("ARCO_IDENTITY", "Verificó la identidad de un titular (ARCO)");
+        ACTION_LABELS.put("ARCO_RESPOND", "Respondió una solicitud ARCO");
+        ACTION_LABELS.put("ARCO_EXECUTE", "Hizo efectivo un derecho ARCO");
+        ACTION_LABELS.put("PRIVACY_VAULT_VIEW", "Abrió los datos en resguardo de un paciente bloqueado");
+        ACTION_LABELS.put("PRIVACY_SELF_EXPORT", "El paciente descargó sus datos personales");
     }
 
     private final AuditLogRepository repository;

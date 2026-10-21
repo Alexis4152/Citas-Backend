@@ -59,6 +59,7 @@ class PaymentsTest extends AbstractIntegrationTest {
 
     private AppointmentResponse bookGuest(Doctor doctor, LocalDate date, LocalTime time) {
         GuestAppointmentRequest req = new GuestAppointmentRequest();
+        req.setAcceptPrivacyNotice(true);
         req.setFirstName("Pago");
         req.setLastName("Prueba-" + randomLetters(6));
         req.setPhone("55" + (10000000 + new java.util.Random().nextInt(89999999)));

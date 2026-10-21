@@ -80,4 +80,82 @@ public class ArcoRequest extends TenantEntity {
 
     @Column(name = "resolved_at")
     private LocalDateTime resolvedAt;
+
+    /** WEB (formulario público), ACCOUNT (paciente con sesión), IN_PERSON (registrada en mostrador). */
+    @Column(nullable = false, length = 15)
+    @Builder.Default
+    private String channel = "WEB";
+
+    /** SHA-256 del enlace de seguimiento que se manda por correo (el token en claro nunca se guarda). */
+    @Column(name = "tracking_token_hash", length = 64)
+    private String trackingTokenHash;
+
+    /** El mismo enlace, cifrado, para volver a mandarlo en los siguientes correos. */
+    @Column(name = "tracking_token_enc", columnDefinition = "TEXT")
+    private String trackingTokenEnc;
+
+    /** Cuando se confirmó el correo: desde aquí corren los 20 días hábiles. */
+    @Column(name = "received_at")
+    private LocalDateTime receivedAt;
+
+    @Column(name = "email_verified_at")
+    private LocalDateTime emailVerifiedAt;
+
+    @Column(name = "is_representative", nullable = false)
+    @Builder.Default
+    private Boolean representative = false;
+
+    @Column(name = "representative_name", length = 150)
+    private String representativeName;
+
+    @Column(name = "identity_verified_at")
+    private LocalDateTime identityVerifiedAt;
+
+    /** ID_ONLINE · ID_IN_PERSON · SESSION_PASSWORD · REPRESENTATIVE. */
+    @Column(name = "identity_method", length = 25)
+    private String identityMethod;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "identity_verified_by_user_id")
+    private User identityVerifiedBy;
+
+    @Column(name = "identity_notes", columnDefinition = "TEXT")
+    private String identityNotes;
+
+    @Column(name = "info_request", columnDefinition = "TEXT")
+    private String infoRequest;
+
+    @Column(name = "info_due")
+    private LocalDate infoDue;
+
+    @Column(name = "info_response", columnDefinition = "TEXT")
+    private String infoResponse;
+
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean extended = false;
+
+    @Column(name = "extension_reason", columnDefinition = "TEXT")
+    private String extensionReason;
+
+    /** PROCEDENTE · PARCIAL · IMPROCEDENTE. */
+    @Column(length = 15)
+    private String outcome;
+
+    @Column(name = "legal_basis", columnDefinition = "TEXT")
+    private String legalBasis;
+
+    /** 15 días hábiles después de responder para hacer efectivo el derecho. */
+    @Column(name = "execution_due")
+    private LocalDate executionDue;
+
+    @Column(name = "executed_at")
+    private LocalDateTime executedAt;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "executed_by_user_id")
+    private User executedBy;
+
+    @Column(name = "execution_summary", columnDefinition = "TEXT")
+    private String executionSummary;
 }

@@ -62,5 +62,10 @@ public interface EmailService {
      * texto del usuario escapado (ver EmailServiceImpl#escapeHtml). */
     void sendHtml(String to, String subject, String bodyHtml);
 
+    /** Correo de privacidad (ARCO, activación de cuenta) con el diseño del hospital: título,
+     * texto, renglones de datos, botón, aviso y, si se da, un PDF adjunto. */
+    void sendPrivacy(String to, String subject, String title, String introHtml, java.util.List<String[]> rows,
+                     String buttonLabel, String buttonUrl, String noteHtml, String attachmentName, byte[] attachment);
+
     void sendPrescriptionToPatient(Prescription prescription, byte[] prescriptionPdf);
 }

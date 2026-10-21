@@ -85,6 +85,8 @@ public class SecurityConfig {
                         // Apartado temporal de horario y formulario ARCO: públicos (sin sesión).
                         .requestMatchers(HttpMethod.POST, "/api/public/slot-holds", "/api/public/arco-requests").permitAll()
                         .requestMatchers(HttpMethod.DELETE, "/api/public/slot-holds/*").permitAll()
+                        // Portal de seguimiento ARCO del titular: lo protege el enlace secreto que le llegó por correo.
+                        .requestMatchers("/api/public/arco/**").permitAll()
                         .requestMatchers("/uploads/**").permitAll()
                         .requestMatchers("/api/appointments/guest").permitAll()
                         .requestMatchers("/api/appointments/guest-receipt/**").permitAll()

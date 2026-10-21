@@ -45,4 +45,11 @@ public class PatientResponse {
     private String postalCode;
     private String emergencyContactName;
     private String emergencyContactPhone;
+    /** Correo que tenía antes de la regla "un correo = un paciente" (duplicado por revisar). */
+    private String emailMoved;
+    /** ACTIVE · BLOCKED · ANONYMIZED. */
+    private String privacyStatus;
+    private java.time.LocalDate retainUntil;
+    private Boolean notifyReminders;
+    private Boolean notifyNews;
 }

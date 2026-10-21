@@ -92,8 +92,8 @@ class MultiHospitalTest extends AbstractIntegrationTest {
     void sameEmailCanHaveAnAccountInEachHospital() {
         OtherHospital other = createOtherHospital();
         String email = "paciente-" + UUID.randomUUID() + "@mail.com";
-        Map<String, String> body = Map.of("firstName", "Ana", "lastName", "Doble", "email", email,
-                "phone", "5512345678", "password", "Paciente123!");
+        Map<String, Object> body = Map.of("firstName", "Ana", "lastName", "Doble", "email", email,
+                "phone", "5512345678", "password", "Paciente123!", "acceptPrivacyNotice", true);
         HttpHeaders otherHeaders = new HttpHeaders();
         otherHeaders.set("X-Hospital", other.hospital().getSlug());
 

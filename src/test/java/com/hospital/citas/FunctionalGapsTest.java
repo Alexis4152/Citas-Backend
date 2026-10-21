@@ -53,6 +53,7 @@ class FunctionalGapsTest extends AbstractIntegrationTest {
     private GuestAppointmentRequest guest(Doctor doctor, Branch branch, LocalDate date, LocalTime time,
                                           String first, String last, String phone) {
         GuestAppointmentRequest req = new GuestAppointmentRequest();
+        req.setAcceptPrivacyNotice(true);
         req.setFirstName(first);
         req.setLastName(last);
         req.setPhone(phone);

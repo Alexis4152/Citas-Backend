@@ -34,6 +34,9 @@ public class PatientRequest {
      * Recepcionista) -- requiere que `email` venga capturado. */
     private Boolean createAccount;
 
+    /** Recepción confirma que el paciente aceptó el aviso de privacidad en persona. */
+    private Boolean privacyConsent;
+
     @NotNull(message = "Alergias y tipo de sangre son obligatorios")
     @Valid
     private MedicalInfoRequest medicalInfo;

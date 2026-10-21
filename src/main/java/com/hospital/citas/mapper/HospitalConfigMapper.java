@@ -39,6 +39,12 @@ public class HospitalConfigMapper {
                 .openingHours(config.getOpeningHours())
                 .autoNoShowEnabled(config.getAutoNoShowEnabled())
                 .noShowGraceMinutes(config.getNoShowGraceMinutes())
+                .privacyContactName(config.getPrivacyContactName())
+                .privacyContactEmail(config.getPrivacyContactEmail())
+                .privacyNoticeVersion(config.getPrivacyNoticeVersion())
+                .privacyNoticeUpdatedAt(config.getPrivacyNoticeUpdatedAt())
+                .clinicalRetentionYears(config.getClinicalRetentionYears())
+                .fiscalRetentionYears(config.getFiscalRetentionYears())
                 .build();
     }
 }

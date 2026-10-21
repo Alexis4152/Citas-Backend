@@ -2,6 +2,7 @@ package com.hospital.citas.service.impl;
 
 import java.util.concurrent.ConcurrentHashMap;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import com.hospital.citas.tenant.HospitalDirectory;
@@ -38,6 +39,8 @@ public class HospitalConfigServiceImpl implements HospitalConfigService {
     private final HospitalConfigMapper hospitalConfigMapper;
     private final FileStorageService fileStorageService;
     private final HospitalDirectory hospitalDirectory;
+    private final com.hospital.citas.repository.PrivacyNoticeVersionRepository noticeVersionRepository;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     // Un renglón por hospital, leído MUCHAS veces (cada correo, cada PDF de comprobante) y
     // escrito casi nunca (solo desde /admin/configuracion) -- sin esto, cada envío de correo
@@ -72,6 +75,16 @@ public class HospitalConfigServiceImpl implements HospitalConfigService {
         config.setOpeningHours(blankToNull(request.getOpeningHours()));
         if (request.getAutoNoShowEnabled() != null) config.setAutoNoShowEnabled(request.getAutoNoShowEnabled());
         if (request.getNoShowGraceMinutes() != null) config.setNoShowGraceMinutes(request.getNoShowGraceMinutes());
+        config.setPrivacyContactName(blankToNull(request.getPrivacyContactName()));
+        config.setPrivacyContactEmail(blankToNull(request.getPrivacyContactEmail()));
+        if (request.getClinicalRetentionYears() != null) config.setClinicalRetentionYears(request.getClinicalRetentionYears());
+        if (request.getFiscalRetentionYears() != null) config.setFiscalRetentionYears(request.getFiscalRetentionYears());
+        if (Boolean.TRUE.equals(request.getPublishPrivacyNotice())) {
+            // La versión vigente se guarda antes de publicar la nueva, para poder consultarla después.
+            saveNoticeSnapshot(config);
+            config.setPrivacyNoticeVersion(config.getPrivacyNoticeVersion() + 1);
+            config.setPrivacyNoticeUpdatedAt(LocalDateTime.now());
+        }
         config.setUpdatedAt(LocalDateTime.now());
         config.setUpdatedBy(SecurityUtils.getCurrentUserOrNull());
         HospitalConfig saved = hospitalConfigRepository.save(config);
@@ -108,6 +121,35 @@ public class HospitalConfigServiceImpl implements HospitalConfigService {
                         .build()));
         cache.put(hospitalId, loaded);
         return loaded;
+    }
+
+    private void saveNoticeSnapshot(HospitalConfig c) {
+        if (noticeVersionRepository.findByVersion(c.getPrivacyNoticeVersion()).isPresent()) return;
+        Map<String, Object> s = new LinkedHashMap<>();
+        s.put("name", c.getName());
+        s.put("legalName", c.getLegalName());
+        s.put("rfc", c.getRfc());
+        s.put("addressLine", c.getAddressLine());
+        s.put("neighborhood", c.getNeighborhood());
+        s.put("city", c.getCity());
+        s.put("state", c.getState());
+        s.put("postalCode", c.getPostalCode());
+        s.put("contactEmail", c.getContactEmail());
+        s.put("contactPhone", c.getContactPhone());
+        s.put("website", c.getWebsite());
+        s.put("privacyContactName", c.getPrivacyContactName());
+        s.put("privacyContactEmail", c.getPrivacyContactEmail());
+        s.put("clinicalRetentionYears", c.getClinicalRetentionYears());
+        s.put("fiscalRetentionYears", c.getFiscalRetentionYears());
+        s.put("privacyNoticeUpdatedAt", c.getPrivacyNoticeUpdatedAt() == null ? null : c.getPrivacyNoticeUpdatedAt().toString());
+        try {
+            noticeVersionRepository.save(com.hospital.citas.entity.PrivacyNoticeVersion.builder()
+                    .version(c.getPrivacyNoticeVersion())
+                    .publishedAt(c.getPrivacyNoticeUpdatedAt() != null ? c.getPrivacyNoticeUpdatedAt() : c.getUpdatedAt())
+                    .snapshot(objectMapper.writeValueAsString(s)).build());
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static String blankToNull(String s) {

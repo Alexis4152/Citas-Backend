@@ -55,4 +55,14 @@ public class GuestAppointmentRequest {
     /** Pestaña del navegador que apartó el horario (ver SlotHoldRequest#holderKey). */
     @jakarta.validation.constraints.Pattern(regexp = "^[A-Za-z0-9-]{8,64}$", message = "Identificador de sesión de agendado inválido")
     private String holderKey;
+
+    /** Acepta el aviso de privacidad y da su consentimiento expreso para el tratamiento de sus
+     * datos de salud (datos sensibles). Obligatorio: queda la constancia con la versión del aviso. */
+    private Boolean acceptPrivacyNotice;
+
+    @jakarta.validation.constraints.AssertTrue(message = "Debes aceptar el aviso de privacidad y el tratamiento de tus datos de salud")
+    public boolean isPrivacyNoticeAccepted() {
+        return Boolean.TRUE.equals(acceptPrivacyNotice);
+    }
+
 }

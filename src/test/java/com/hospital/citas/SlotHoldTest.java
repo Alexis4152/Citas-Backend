@@ -68,6 +68,7 @@ class SlotHoldTest extends AbstractIntegrationTest {
         body.put("appointmentDate", f.date().toString());
         body.put("startTime", time.toString());
         body.put("medicalInfo", Map.of("allergies", "Ninguna", "bloodType", "O_POSITIVE"));
+        body.put("acceptPrivacyNotice", true);
         if (holdToken != null) body.put("holdToken", holdToken);
         if (holderKey != null) body.put("holderKey", holderKey);
         return body;

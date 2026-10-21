@@ -335,6 +335,22 @@ public class EmailServiceImpl implements EmailService {
                 .build(h.getName(), logoUrl(h), contact(h), "Recibes este correo por una solicitud de derechos ARCO."));
     }
 
+    @Override
+    @Async("notificationExecutor")
+    public void sendPrivacy(String to, String subject, String title, String introHtml, List<String[]> rows,
+                            String buttonLabel, String buttonUrl, String noteHtml, String attachmentName, byte[] attachment) {
+        deliverWithAttachment(to, subject, attachmentName, attachment, h -> {
+            EmailTemplate t = new EmailTemplate(h.getPrimaryColor())
+                    .preheader(title)
+                    .hero("&#128737;", Tone.BRAND, "Datos personales", title, introHtml);
+            if (rows != null && !rows.isEmpty()) t.rows(rows);
+            if (buttonLabel != null && buttonUrl != null) t.button(buttonLabel, buttonUrl);
+            if (noteHtml != null) t.notice(Tone.NEUTRAL, "Importante", noteHtml);
+            return t.build(h.getName(), logoUrl(h), contact(h),
+                    "Recibes este correo por una solicitud sobre tus datos personales en " + h.getName() + ".");
+        });
+    }
+
     /** Escapa texto capturado por usuarios antes de insertarlo en un correo HTML. */
     public static String escapeHtml(String value) {
         return esc(value);

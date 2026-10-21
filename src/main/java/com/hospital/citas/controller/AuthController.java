@@ -50,9 +50,20 @@ public class AuthController {
     public ResponseEntity<ApiResponse<LoginResponse>> register(@Valid @RequestBody RegisterRequest request,
                                                                  HttpServletResponse response) {
         LoginResponse loginResponse = authService.register(request);
+        if (Boolean.TRUE.equals(loginResponse.getPendingActivation())) {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.ok(loginResponse,
+                    "Ya tenemos un expediente con este correo. Te enviamos un enlace para activar tu cuenta y ligarla a tu expediente."));
+        }
         issueRefreshCookie(loginResponse.getUser().getId(), response);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.ok(loginResponse, "Cuenta creada correctamente"));
+    }
+
+    @PostMapping("/activate/{token}")
+    public ApiResponse<LoginResponse> activate(@PathVariable String token, HttpServletResponse response) {
+        LoginResponse loginResponse = authService.activate(token);
+        issueRefreshCookie(loginResponse.getUser().getId(), response);
+        return ApiResponse.ok(loginResponse, "Cuenta activada y ligada a tu expediente");
     }
 
     @PostMapping("/login")

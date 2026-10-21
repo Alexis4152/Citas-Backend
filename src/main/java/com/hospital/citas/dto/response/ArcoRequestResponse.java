@@ -34,4 +34,36 @@ public class ArcoRequestResponse {
     /** Solo en la vista de la plataforma (SUPER_ADMIN). */
     private String hospitalName;
     private String hospitalSlug;
+
+    private String channel;
+    private LocalDateTime receivedAt;
+    private boolean emailVerified;
+    private boolean representative;
+    private String representativeName;
+    private LocalDateTime identityVerifiedAt;
+    private String identityMethod;
+    private String identityMethodLabel;
+    private String identityVerifiedByName;
+    private String identityNotes;
+    /** El derecho necesita identidad verificada y todavía no la tiene. */
+    private boolean identityRequired;
+    private String infoRequest;
+    private LocalDate infoDue;
+    private String infoResponse;
+    private boolean extended;
+    private String extensionReason;
+    private String outcome;
+    private String outcomeLabel;
+    private String legalBasis;
+    private LocalDate executionDue;
+    private LocalDateTime executedAt;
+    private String executedByName;
+    private String executionSummary;
+    private Long patientId;
+    private String patientName;
+    /** Sigue abierta (recibida, con requerimiento o por ejecutar). */
+    private boolean open;
+    /** Próxima fecha límite que corre (respuesta, información del titular o ejecución). */
+    private LocalDate nextDeadline;
+    private String nextDeadlineLabel;
 }

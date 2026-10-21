@@ -41,6 +41,17 @@ public interface PatientRepository extends JpaRepository<Patient, Long> {
     /** Registros de paciente con ese correo en el hospital actual (solicitudes ARCO). */
     List<Patient> findByEmailIgnoreCase(String email);
 
+    /** El paciente vigente dueño de ese correo en el hospital actual (un correo = un paciente). */
+    Optional<Patient> findFirstByEmailIgnoreCaseAndIsActiveTrue(String email);
+
+    /** ¿Ya hay OTRO paciente vigente con ese correo? ({@code exceptId} null = cualquiera). */
+    @Query("""
+            SELECT COUNT(p) > 0 FROM Patient p
+            WHERE p.isActive = true AND p.email IS NOT NULL AND LOWER(p.email) = LOWER(:email)
+              AND (:exceptId IS NULL OR p.id <> :exceptId)
+            """)
+    boolean emailTakenByAnother(@Param("email") String email, @Param("exceptId") Long exceptId);
+
     /** Pacientes activos de un doctor: con al menos una cita con él o dados de alta por él. */
     @Query("""
             SELECT p FROM Patient p
@@ -72,8 +83,11 @@ public interface PatientRepository extends JpaRepository<Patient, Long> {
             SELECT p FROM Patient p
             WHERE p.id <> :id AND p.isActive = true
               AND ((:phone <> '' AND p.phone = :phone)
-                   OR (:email <> '' AND p.email IS NOT NULL AND LOWER(p.email) = LOWER(:email)))
+                   OR (:email <> '' AND p.email IS NOT NULL AND LOWER(p.email) = LOWER(:email))
+                   OR (:email <> '' AND p.emailMoved IS NOT NULL AND LOWER(p.emailMoved) = LOWER(:email))
+                   OR (:emailMoved <> '' AND p.email IS NOT NULL AND LOWER(p.email) = LOWER(:emailMoved)))
             ORDER BY p.id
             """)
-    List<Patient> findPossibleDuplicates(@Param("id") Long id, @Param("phone") String phone, @Param("email") String email);
+    List<Patient> findPossibleDuplicates(@Param("id") Long id, @Param("phone") String phone, @Param("email") String email,
+                                         @Param("emailMoved") String emailMoved);
 }

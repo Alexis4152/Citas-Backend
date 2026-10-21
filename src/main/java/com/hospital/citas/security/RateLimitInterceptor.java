@@ -54,6 +54,9 @@ public class RateLimitInterceptor implements HandlerInterceptor {
             new Rule("token-receipt", "GET", "/api/appointments/guest-receipt/*", 20, Duration.ofMinutes(1)),
             // ARCO: avisa por correo al hospital.
             new Rule("arco", "POST", "/api/public/arco-requests", 3, Duration.ofMinutes(15)),
+            new Rule("arco-track", "GET", "/api/public/arco/**", 60, Duration.ofMinutes(15)),
+            new Rule("arco-track-write", "POST", "/api/public/arco/**", 15, Duration.ofMinutes(15)),
+            new Rule("activate", "POST", "/api/auth/activate/**", 10, Duration.ofMinutes(15)),
             // Pagos y webhook (OpenPay reintenta, por eso es amplio).
             new Rule("webhook", "POST", "/api/webhooks/openpay", 600, Duration.ofMinutes(1)),
             // Disponibilidad: el calendario la refresca cada pocos segundos mientras está abierto.

@@ -47,8 +47,11 @@ public class AuditInterceptor implements HandlerInterceptor {
             new Rule("GET", "/api/reports/export.xlsx", "REPORT_EXPORT", null),
             new Rule("PUT", "/api/admin/permissions/roles/{id}", "PERMISSIONS_ROLE", null),
             new Rule("PUT", "/api/admin/permissions/users/{id}", "PERMISSIONS_USER", "USER"),
-            new Rule("GET", "/api/admin/arco-requests/{id}/export", "ARCO_EXPORT", "ARCO"),
-            new Rule("PUT", "/api/admin/arco-requests/{id}/resolve", "ARCO_RESOLVE", "ARCO"));
+            new Rule("GET", "/api/admin/arco-requests/{id}/documents/{documentId}", "ARCO_DOCUMENT_VIEW", "ARCO"),
+            new Rule("POST", "/api/admin/arco-requests/{id}/verify-identity", "ARCO_IDENTITY", "ARCO"),
+            new Rule("POST", "/api/admin/arco-requests/{id}/respond", "ARCO_RESPOND", "ARCO"),
+            new Rule("POST", "/api/admin/arco-requests/{id}/execute", "ARCO_EXECUTE", "ARCO"),
+            new Rule("POST", "/api/privacy/me/export", "PRIVACY_SELF_EXPORT", null));
 
     private final AntPathMatcher matcher = new AntPathMatcher();
     private final AuditService auditService;

@@ -31,4 +31,14 @@ public class RegisterRequest {
 
     @Pattern(regexp = ValidationPatterns.PHONE_REGEXP_OPTIONAL, message = ValidationPatterns.PHONE_MESSAGE)
     private String phone;
+
+    /** Acepta el aviso de privacidad y da su consentimiento expreso para el tratamiento de sus
+     * datos de salud (datos sensibles). Obligatorio: queda la constancia con la versión del aviso. */
+    private Boolean acceptPrivacyNotice;
+
+    @jakarta.validation.constraints.AssertTrue(message = "Debes aceptar el aviso de privacidad y el tratamiento de tus datos de salud")
+    public boolean isPrivacyNoticeAccepted() {
+        return Boolean.TRUE.equals(acceptPrivacyNotice);
+    }
+
 }

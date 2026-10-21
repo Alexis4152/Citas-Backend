@@ -78,6 +78,30 @@ public class HospitalConfig extends TenantEntity {
     @Column(name = "no_show_grace_minutes", nullable = false)
     private Integer noShowGraceMinutes = 30;
 
+    /** Responsable / Departamento de Datos Personales que aparece en el aviso de privacidad. */
+    @Column(name = "privacy_contact_name", length = 150)
+    private String privacyContactName;
+
+    @Column(name = "privacy_contact_email", length = 150)
+    private String privacyContactEmail;
+
+    @Builder.Default
+    @Column(name = "privacy_notice_version", nullable = false)
+    private Integer privacyNoticeVersion = 1;
+
+    @Column(name = "privacy_notice_updated_at")
+    private LocalDateTime privacyNoticeUpdatedAt;
+
+    /** Años que se guarda el expediente clínico desde el último acto médico (NOM-004: mínimo 5). */
+    @Builder.Default
+    @Column(name = "clinical_retention_years", nullable = false)
+    private Integer clinicalRetentionYears = 5;
+
+    /** Años que se guardan los datos de pagos (obligaciones fiscales). */
+    @Builder.Default
+    @Column(name = "fiscal_retention_years", nullable = false)
+    private Integer fiscalRetentionYears = 5;
+
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 

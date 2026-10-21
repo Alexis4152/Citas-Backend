@@ -91,6 +91,7 @@ class PermissionsAndReportsTest extends AbstractIntegrationTest {
         Map<String, Object> guest = new HashMap<>(Map.of("firstName", "Reporte", "lastName", "Prueba", "phone", "5533344455",
                 "doctorId", doctor.getId(), "branchId", branch.getId(), "appointmentDate", LocalDate.now().plusDays(2).toString(),
                 "startTime", "11:00", "medicalInfo", Map.of("allergies", "Ninguna", "bloodType", "O_POSITIVE")));
+        guest.put("acceptPrivacyNotice", true);
         assertThat(restTemplate.postForEntity(baseUrl("/api/appointments/guest"), guest, String.class).getStatusCode())
                 .isEqualTo(HttpStatus.CREATED);
         String range = "?from=" + LocalDate.now() + "&to=" + LocalDate.now().plusDays(7);
@@ -129,6 +130,7 @@ class PermissionsAndReportsTest extends AbstractIntegrationTest {
         Map<String, Object> guest = new HashMap<>(Map.of("firstName", "Catálogo", "lastName", "Reportes", "phone", "5533344466",
                 "doctorId", doctor.getId(), "branchId", branch.getId(), "appointmentDate", LocalDate.now().plusDays(2).toString(),
                 "startTime", "12:00", "medicalInfo", Map.of("allergies", "Ninguna", "bloodType", "O_POSITIVE")));
+        guest.put("acceptPrivacyNotice", true);
         assertThat(restTemplate.postForEntity(baseUrl("/api/appointments/guest"), guest, String.class).getStatusCode())
                 .isEqualTo(HttpStatus.CREATED);
         String admin = adminToken();

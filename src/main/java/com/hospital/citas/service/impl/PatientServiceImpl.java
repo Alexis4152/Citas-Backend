@@ -43,6 +43,7 @@ public class PatientServiceImpl implements PatientService {
     private final EmailService emailService;
     private final AppointmentRepository appointmentRepository;
     private final DoctorScope doctorScope;
+    private final com.hospital.citas.service.ConsentService consentService;
 
     @Override
     @Transactional(readOnly = true)
@@ -70,11 +71,13 @@ public class PatientServiceImpl implements PatientService {
     @Override
     @Transactional
     public PatientResponse create(PatientRequest request) {
+        String email = normalizeEmail(request.getEmail());
+        requireEmailFree(email, null);
         Patient patient = new Patient();
         patient.setFirstName(request.getFirstName());
         patient.setLastName(request.getLastName());
         patient.setPhone(request.getPhone());
-        patient.setEmail(request.getEmail());
+        patient.setEmail(email);
         applyProfile(patient, request.getBirthDate(), request.getSex(), request.getCurp(), request.getAddressLine(),
                 request.getNeighborhood(), request.getCity(), request.getState(), request.getPostalCode(),
                 request.getEmergencyContactName(), request.getEmergencyContactPhone());
@@ -89,6 +92,10 @@ public class PatientServiceImpl implements PatientService {
         }
 
         patient = patientRepository.save(patient);
+        // En recepción el aviso de privacidad se acepta en persona: queda la constancia.
+        if (Boolean.TRUE.equals(request.getPrivacyConsent())) {
+            consentService.recordAcceptance(patient, patient.getUser(), "RECEPTION");
+        }
 
         PatientResponse response = patientMapper.toResponse(patient);
         response.setTemporaryPassword(temporaryPassword);
@@ -140,7 +147,20 @@ public class PatientServiceImpl implements PatientService {
         // recepción con la herramienta de fusionar pacientes.
         String first = firstName.trim();
         String last = lastName.trim();
-        String cleanEmail = email == null || email.isBlank() ? null : email.trim();
+        String cleanEmail = normalizeEmail(email);
+        // Un correo = un paciente por hospital: si ese correo ya es de alguien, solo se reutiliza
+        // cuando es la misma persona (mismo nombre); si es de otra, se rechaza para no mezclar expedientes.
+        if (cleanEmail != null) {
+            var owner = patientRepository.findFirstByEmailIgnoreCaseAndIsActiveTrue(cleanEmail);
+            if (owner.isPresent()) {
+                Patient p = owner.get();
+                if (p.getFirstName().trim().equalsIgnoreCase(first) && p.getLastName().trim().equalsIgnoreCase(last)) {
+                    return p;
+                }
+                throw new BusinessException("Ese correo ya está registrado a nombre de otra persona en este hospital. "
+                        + "Usa tu propio correo o déjalo vacío (por ejemplo, si agendas para un familiar).");
+            }
+        }
         var existing = patientRepository
                 .findFirstByUserIsNullAndIsActiveTrueAndPhoneAndFirstNameIgnoreCaseAndLastNameIgnoreCaseOrderByIdAsc(phone, first, last);
         if (existing.isPresent()) {
@@ -164,6 +184,10 @@ public class PatientServiceImpl implements PatientService {
     public Patient findOrCreatePatientForUser(User user) {
         return patientRepository.findByUser_Id(user.getId())
                 .orElseGet(() -> {
+                    if (user.getEmail() != null && patientRepository.emailTakenByAnother(user.getEmail(), null)) {
+                        throw new BusinessException("Ya hay un expediente con tu correo: confírmalo desde el correo de activación "
+                                + "que te enviamos para ligarlo a tu cuenta.");
+                    }
                     Patient patient = new Patient();
                     patient.setFirstName(user.getFirstName());
                     patient.setLastName(user.getLastName());
@@ -204,10 +228,13 @@ public class PatientServiceImpl implements PatientService {
         if (!Boolean.TRUE.equals(patient.getIsActive())) {
             throw new BusinessException("Ese paciente fue fusionado con otro registro; edita el registro vigente");
         }
+        String email = normalizeEmail(request.getEmail());
+        requireEmailFree(email, patient.getId());
         patient.setFirstName(request.getFirstName().trim());
         patient.setLastName(request.getLastName().trim());
         patient.setPhone(request.getPhone());
-        patient.setEmail(blank(request.getEmail()) ? null : request.getEmail().trim());
+        patient.setEmail(email);
+        if (email != null && email.equalsIgnoreCase(patient.getEmailMoved())) patient.setEmailMoved(null);
         applyProfile(patient, request.getBirthDate(), request.getSex(), request.getCurp(), request.getAddressLine(),
                 request.getNeighborhood(), request.getCity(), request.getState(), request.getPostalCode(),
                 request.getEmergencyContactName(), request.getEmergencyContactPhone());
@@ -232,6 +259,18 @@ public class PatientServiceImpl implements PatientService {
 
     private static boolean blank(String s) {
         return s == null || s.isBlank();
+    }
+
+    private static String normalizeEmail(String email) {
+        return blank(email) ? null : email.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** Un correo solo puede ser de un paciente vigente por hospital (en otro hospital sí se repite). */
+    private void requireEmailFree(String email, Long exceptId) {
+        if (email != null && patientRepository.emailTakenByAnother(email, exceptId)) {
+            throw new DuplicateResourceException("Ese correo ya pertenece a otro paciente de este hospital: búscalo en Pacientes "
+                    + "(o fusiona los registros si es la misma persona) o usa otro correo.");
+        }
     }
 
     @Override
@@ -262,7 +301,8 @@ public class PatientServiceImpl implements PatientService {
         return patientRepository.findPossibleDuplicates(
                         patient.getId(),
                         patient.getPhone() == null ? "" : patient.getPhone(),
-                        patient.getEmail() == null ? "" : patient.getEmail())
+                        patient.getEmail() == null ? "" : patient.getEmail(),
+                        patient.getEmailMoved() == null ? "" : patient.getEmailMoved())
                 .stream()
                 // Un doctor solo ve (y puede fusionar) duplicados que también son pacientes suyos.
                 .filter(p -> ownDoctorId == null || patientRepository.isPatientOfDoctor(p.getId(), ownDoctorId, currentUser.getId()))
@@ -305,8 +345,16 @@ public class PatientServiceImpl implements PatientService {
             target.setMedicalInfoUpdatedBy(source.getMedicalInfoUpdatedBy());
             target.setMedicalInfoUpdatedAt(source.getMedicalInfoUpdatedAt());
         }
-        if ((target.getEmail() == null || target.getEmail().isBlank()) && source.getEmail() != null) {
-            target.setEmail(source.getEmail());
+        // El correo pasa al destino si no tiene uno (el origen lo suelta antes, por la regla de correo único).
+        if ((target.getEmail() == null || target.getEmail().isBlank()) && (source.getEmail() != null || source.getEmailMoved() != null)) {
+            String moved = source.getEmail() != null ? source.getEmail() : source.getEmailMoved();
+            source.setEmail(null);
+            source.setEmailMoved(null);
+            patientRepository.saveAndFlush(source);
+            target.setEmail(moved);
+            if (moved.equalsIgnoreCase(target.getEmailMoved())) target.setEmailMoved(null);
+        } else if (target.getEmail() != null && target.getEmail().equalsIgnoreCase(source.getEmailMoved())) {
+            source.setEmailMoved(null);
         }
         target.setUpdatedBy(SecurityUtils.getCurrentUserOrNull());
         patientRepository.saveAndFlush(target);

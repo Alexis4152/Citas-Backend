@@ -10,6 +10,9 @@ import com.hospital.citas.entity.User;
 
 public interface AuthService {
     LoginResponse register(RegisterRequest request);
+
+    /** Activa la cuenta (enlace del correo) y la liga al expediente que ya existía con ese correo. */
+    LoginResponse activate(String token);
     LoginResponse login(LoginRequest request);
     User getCurrentUser();
 
